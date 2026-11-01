@@ -1,0 +1,10 @@
+@host = http://localhost:5092
+@token = replace-with-access-token
+
+GET {{host}}/health
+
+###
+
+GET {{host}}/api/dashboard
+Authorization: Bearer {{token}}
+Accept: application/json

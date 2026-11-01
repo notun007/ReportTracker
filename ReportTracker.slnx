@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ReportTracker.Api/ReportTracker.Api.csproj" />
+    <Project Path="src/ReportTracker.Application/ReportTracker.Application.csproj" />
+    <Project Path="src/ReportTracker.Domain/ReportTracker.Domain.csproj" />
+    <Project Path="src/ReportTracker.Infrastructure/ReportTracker.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ReportTracker.Tests/ReportTracker.Tests.csproj" />
+  </Folder>
+</Solution>

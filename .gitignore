@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/.angular/
+.vs/
+.vscode/
+appsettings.Local.json
+*.user
+*.suo
+.env
+screenshots/
