@@ -163,7 +163,19 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     public async Task<IActionResult> CreateDivision(CreateDivisionRequest request, CancellationToken ct)
     {
         await access.RequireAsync("administration.manage", null, null, ct);
-        var division = new Division { Code = request.Code.Trim().ToUpperInvariant(), Name = request.Name.Trim() };
+        var code = request.Code.Trim().ToUpperInvariant();
+        // Treat an existing code as a normal validation outcome, before attempting a database insert.
+        if (await db.Divisions.AsNoTracking().AnyAsync(x => x.Code == code, ct))
+        {
+            return Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Division code already exists.",
+                Detail = $"Division code '{code}' is already in use. Please enter a different code.",
+                Extensions = { ["code"] = "division_code_exists", ["field"] = "code" }
+            });
+        }
+        var division = new Division { Code = code, Name = request.Name.Trim() };
         db.Divisions.Add(division);
         Audit(nameof(Division), division.Id, "DivisionCreated", new { division.Code, division.Name });
         await db.SaveChangesAsync(ct);

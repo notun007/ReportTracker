@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\src\ReportTracker.Application\ReportTracker.Application.csproj" />
     <ProjectReference Include="..\..\src\ReportTracker.Domain\ReportTracker.Domain.csproj" />
     <ProjectReference Include="..\..\src\ReportTracker.Infrastructure\ReportTracker.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\ReportTracker.Api\ReportTracker.Api.csproj" />
   </ItemGroup>
 
 </Project>

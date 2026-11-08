@@ -12,6 +12,15 @@ public sealed class ValidateSessionAntiforgery(IAntiforgery antiforgery) : IAsyn
         if (HttpMethods.IsGet(request.Method) || HttpMethods.IsHead(request.Method) || HttpMethods.IsOptions(request.Method)) return;
         if (request.Headers.Authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) && context.HttpContext.User.Identity?.IsAuthenticated == true) return;
         try { await antiforgery.ValidateRequestAsync(context.HttpContext); }
-        catch (AntiforgeryValidationException) { context.Result = new BadRequestObjectResult(new ProblemDetails { Status = 400, Title = "Your session token expired. Refresh the page and try again." }); }
+        catch (AntiforgeryValidationException)
+        {
+            // Validation runs before the action, so clients may safely refresh the token and retry once.
+            context.Result = new BadRequestObjectResult(new ProblemDetails
+            {
+                Status = 400,
+                Title = "Your session token expired. Refresh the page and try again.",
+                Extensions = { ["code"] = "csrf_token_invalid" }
+            });
+        }
     }
 }

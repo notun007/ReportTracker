@@ -19,7 +19,7 @@ The existing local connection is stored in ASP.NET Core user secrets for this AP
 $env:ConnectionStrings__ReportTracker = 'Server=YOUR_SERVER;Database=ReportTracker;User ID=YOUR_USER;Password=YOUR_PASSWORD;TrustServerCertificate=True'
 ```
 
-Local accounts are enabled by default. Passwords use ASP.NET Core's versioned PBKDF2 password hasher. Five failed sign-in attempts lock the account for 15 minutes. Sessions use HttpOnly cookies with an eight-hour absolute lifetime. Cookie-authenticated changes require the antiforgery header supplied by Angular.
+Local accounts are enabled by default. Passwords use ASP.NET Core's versioned PBKDF2 password hasher. Five failed sign-in attempts lock the account for 15 minutes. Sessions use HttpOnly cookies with an eight-hour absolute lifetime. Cookie-authenticated changes require the antiforgery header supplied by Angular. The browser uses the application-specific `ReportTracker.XSRF-TOKEN` cookie so other localhost apps cannot overwrite its request token. Sign-in/setup/logout refresh the token first. Only an explicit `csrf_token_invalid` response from the pre-action validation filter triggers one automatic refresh and retry; business validation and authentication failures are not replayed. Restart the API and refresh the client together after updating this token configuration.
 
 Set `EvidenceStorage__Root` to a protected server directory outside the public web root. Configure `Notifications__Email__*` for the bank SMTP relay and `Notifications__Sms__*` for the approved SMS HTTP provider. Keep provider credentials in user secrets or the deployment secret store. Outlook integration is intentionally excluded.
 
@@ -53,10 +53,10 @@ dotnet run --project src/ReportTracker.Api --launch-profile http
 ```powershell
 cd ../ReportTracker.Web
 npm ci
-npm start
+npm run start:http
 ```
 
-Open `http://localhost:4200`. The default development proxy targets the repository's IIS Express profile at `http://localhost:62232`. When running the API with `dotnet run --launch-profile http` on port `5092`, start the client with `npm run start:http` instead. Restart the Angular development server after changing API profiles because proxy configuration is loaded only at startup.
+Open `http://localhost:4200`. The default development proxy targets the repository's IIS Express HTTPS profile at `https://localhost:44332`. When running the API with `dotnet run --launch-profile http` on port `5092`, start the client with `npm run start:http` instead. Restart the Angular development server after changing API profiles because proxy configuration is loaded only at startup.
 
 The first visit shows workspace setup. Create the coordinating division and initial account with a password of at least 12 characters. This account receives **two explicit roles**: System Administrator and Report Coordinator. Initial setup is permitted from a loopback connection in Development. Other environments require `Authentication__SetupKey`; enter it in the setup form. Setup closes permanently once an account exists.
 
@@ -98,5 +98,7 @@ Backend tests cover assignment isolation, trusted audit identity, partial sendin
 Implemented: local sign-in/setup/logout; division and account lifecycle administration; scoped coordinator access; report definitions and component responsibilities; Biweekly and other recurring frequencies; automatic idempotent cycle generation; linked component/final obligations; derived readiness; partial/full sending and history; confirmation-only evidence upload, signature validation, review and protected download; receipt confirmation/dispute; extension request/decision with requester-approver separation; audited status amendments; reminder policies; background email/SMS planning, delivery, retry and monitoring; reporting calendar; management analytics; and responsive role-aware operational screens.
 
 Deployment activities still requiring the bank environment are SMTP/SMS provider credentials and connectivity, a bank-approved malware scanner for uploaded evidence, backup/restore and disaster-recovery exercises, penetration/security testing, production accessibility review, user-acceptance testing and provider-specific SSO. Outlook integration remains intentionally deferred.
+
+
 
 

@@ -28,7 +28,9 @@ public sealed record ObligationListItemDto(
     bool IsAssignedToMe,
     int RequiredComponentCount,
     int CompletedComponentCount,
-    bool IsReadyForSubmission);
+    bool IsReadyForSubmission,
+    Guid DivisionId,
+    string Division);
 
 public sealed record StatusCountDto(string Status, int Count);
 

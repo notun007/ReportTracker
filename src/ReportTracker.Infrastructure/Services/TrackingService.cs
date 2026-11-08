@@ -29,10 +29,12 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
         var owners = await db.Users.AsNoTracking().Where(x => rows.Select(r => r.PrimaryOfficerId).Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, x => x.DisplayName, ct);
         var writable = await access.AuthorizedObligations(true).Select(x => x.Id).ToHashSetAsync(ct);
+        var divisions = await db.Divisions.AsNoTracking().Where(x => rows.Select(r => r.AccountableDivisionId).Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, x => x.Name, ct);
         var readiness = ReadinessByMainObligation(rows);
         var readyForSubmission = readiness.Values.Count(x => x.Required > 0 && x.Completed == x.Required);
         var upcoming = rows.Select(x => ToDto(x, owners.GetValueOrDefault(x.PrimaryOfficerId ?? Guid.Empty, "Unassigned"), writable.Contains(x.Id), now, access.UserId,
-            readiness.GetValueOrDefault(x.Id))).ToList();
+            readiness.GetValueOrDefault(x.Id), divisions.GetValueOrDefault(x.AccountableDivisionId, "Unknown division"))).ToList();
         var performance = Enum.GetValues<SendingStatus>().Select(status => new StatusCountDto(Label(status), rows.Count(x => x.SendingStatus == status))).ToList();
         return new(myPending, dueToday, overdue, readyForSubmission, evidencePending, upcoming, performance);
     }
@@ -44,9 +46,10 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
             .Include(x => x.SendingEvents).FirstOrDefaultAsync(x => x.Id == id, ct);
         if (row is null) return null;
         var owner = await db.Users.Where(x => x.Id == row.PrimaryOfficerId).Select(x => x.DisplayName).FirstOrDefaultAsync(ct);
+        var division = await db.Divisions.AsNoTracking().Where(x => x.Id == row.AccountableDivisionId).Select(x => x.Name).FirstOrDefaultAsync(ct);
         var cycleRows = await access.AuthorizedObligations().AsNoTracking().Where(x => x.ReportCycleId == row.ReportCycleId).ToListAsync(ct);
         return ToDto(row, owner ?? "Unassigned", await access.AuthorizedObligations(true).AnyAsync(x => x.Id == id, ct), DateTime.UtcNow, access.UserId,
-            ReadinessByMainObligation(cycleRows).GetValueOrDefault(row.Id));
+            ReadinessByMainObligation(cycleRows).GetValueOrDefault(row.Id), division ?? "Unknown division");
     }
 
     public async Task<bool> RecordSendingAsync(Guid obligationId, RecordSendingCommand command, CancellationToken ct)
@@ -98,7 +101,7 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
     }
 
     private static ObligationListItemDto ToDto(TrackingObligation row, string owner, bool writable, DateTime now, Guid userId,
-        (int Required, int Completed)? readiness = null)
+        (int Required, int Completed)? readiness, string division)
     {
         var actual = row.SendingStatus == SendingStatus.Sent
             ? row.SendingEvents.Where(x => !x.IsReversed && !x.IsPartial).Select(x => (DateTime?)x.ActualSentAtUtc).Max() : null;
@@ -109,7 +112,8 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
             Convert.ToBase64String(row.RowVersion), writable && row.SendingStatus != SendingStatus.Sent && row.ExceptionStatus == ExceptionStatus.None,
             row.PrimaryOfficerId == userId || row.DeputyOfficerId == userId,
             readiness?.Required ?? 0, readiness?.Completed ?? 0,
-            readiness is { Required: > 0 } value && value.Required == value.Completed);
+            readiness is { Required: > 0 } value && value.Required == value.Completed,
+            row.AccountableDivisionId, division);
     }
 
     private static Dictionary<Guid, (int Required, int Completed)> ReadinessByMainObligation(IEnumerable<TrackingObligation> obligations)

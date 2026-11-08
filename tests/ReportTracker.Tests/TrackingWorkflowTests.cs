@@ -70,6 +70,31 @@ public sealed class TrackingWorkflowTests
     }
 
     [Fact]
+    public async Task Dashboard_and_detail_return_accountable_division_separately_from_officer()
+    {
+        var actor = Guid.NewGuid();
+        await using var provider = Provider(actor);
+        var db = provider.GetRequiredService<ReportTrackerDbContext>();
+        var own = Seed(db, actor);
+        var division = db.Divisions.Local.Single(x => x.Id == own.AccountableDivisionId);
+        division.Name = "Finance Division";
+        var other = Seed(db, Guid.NewGuid());
+        own.PrimaryOfficerId = other.PrimaryOfficerId;
+        own.DeputyOfficerId = actor;
+        await db.SaveChangesAsync();
+
+        var service = provider.GetRequiredService<ITrackingService>();
+        var row = Assert.Single((await service.GetDashboardAsync(default)).Upcoming);
+        Assert.Equal(division.Id, row.DivisionId);
+        Assert.Equal("Finance Division", row.Division);
+        Assert.DoesNotContain("Finance Division", row.Owner);
+        var detail = await service.GetObligationAsync(own.Id, default);
+        Assert.NotNull(detail);
+        Assert.Equal(row.DivisionId, detail.DivisionId);
+        Assert.Equal(row.Division, detail.Division);
+    }
+
+    [Fact]
     public async Task Read_permission_is_scoped_and_does_not_grant_sending_authority()
     {
         var actor = Guid.NewGuid();

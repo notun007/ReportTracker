@@ -126,7 +126,7 @@ public sealed class AuthController(ReportTrackerDbContext db, IAntiforgery antif
     private void SetCsrfCookie()
     {
         var tokens = antiforgery.GetAndStoreTokens(HttpContext);
-        Response.Cookies.Append("XSRF-TOKEN", tokens.RequestToken!, new CookieOptions { HttpOnly = false,
+        Response.Cookies.Append("ReportTracker.XSRF-TOKEN", tokens.RequestToken!, new CookieOptions { HttpOnly = false,
             Secure = !environment.IsDevelopment(), SameSite = SameSiteMode.Strict, Path = "/", IsEssential = true });
     }
 }
