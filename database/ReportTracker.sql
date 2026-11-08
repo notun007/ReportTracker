@@ -879,3 +879,141 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102124108_SmartWorkflowFoundation'
+)
+BEGIN
+    ALTER TABLE [tracker].[DefinitionVersions] ADD [ComponentDeadlineOffsetDays] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102124108_SmartWorkflowFoundation'
+)
+BEGIN
+    ALTER TABLE [tracker].[ComponentDefinitions] ADD [Description] nvarchar(max) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102124108_SmartWorkflowFoundation'
+)
+BEGIN
+    ALTER TABLE [tracker].[ComponentDefinitions] ADD [EvidenceRequired] bit NOT NULL DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102124108_SmartWorkflowFoundation'
+)
+BEGIN
+    ALTER TABLE [tracker].[ComponentDefinitions] ADD [IsRequired] bit NOT NULL DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102124108_SmartWorkflowFoundation'
+)
+BEGIN
+    ALTER TABLE [tracker].[ComponentDefinitions] ADD [Sequence] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102124108_SmartWorkflowFoundation'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261102124108_SmartWorkflowFoundation', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[Users] ADD [MobileNumber] nvarchar(max) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReminderPolicies] ADD [DailyOverdueReminders] bit NOT NULL DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReminderPolicies] ADD [Name] nvarchar(max) NOT NULL DEFAULT N'';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReminderPolicies] ADD [QuietHoursEnd] time NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReminderPolicies] ADD [QuietHoursStart] time NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReminderPolicies] ADD [RecipientsCsv] nvarchar(max) NOT NULL DEFAULT N'';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReminderPolicies] ADD [WorkingDaysCsv] nvarchar(max) NOT NULL DEFAULT N'';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[NotificationJobs] ADD [Recipient] nvarchar(max) NOT NULL DEFAULT N'';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    ALTER TABLE [tracker].[EvidenceDocuments] ADD [TrackingObligationId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261102154533_ComprehensiveOperations'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261102154533_ComprehensiveOperations', N'10.0.10');
+END;
+
+COMMIT;
+GO
+

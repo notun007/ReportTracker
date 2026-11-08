@@ -50,12 +50,18 @@ public sealed class ExtensionDecision : Entity
 
 public sealed class ReminderPolicy : Entity
 {
+    public required string Name { get; set; }
     public Guid? ReportDefinitionId { get; set; }
     public required string ObligationCategory { get; set; }
     public string LeadDaysCsv { get; set; } = "2,1,0";
     public TimeOnly DispatchTime { get; set; }
     public string TimeZoneId { get; set; } = "Asia/Dhaka";
     public required string ChannelsCsv { get; set; }
+    public string RecipientsCsv { get; set; } = "Primary,Deputy";
+    public bool DailyOverdueReminders { get; set; } = true;
+    public string WorkingDaysCsv { get; set; } = "Sun,Mon,Tue,Wed,Thu";
+    public TimeOnly? QuietHoursStart { get; set; }
+    public TimeOnly? QuietHoursEnd { get; set; }
     public int EscalationAfterDays { get; set; }
     public bool IsActive { get; set; } = true;
 }
@@ -67,6 +73,7 @@ public sealed class NotificationJob : Entity
     public required string LogicalKey { get; set; }
     public DateOnly LocalDate { get; set; }
     public required string Channel { get; set; }
+    public required string Recipient { get; set; }
     public DateTime DueAtUtc { get; set; }
     public string Status { get; set; } = "Pending";
     public int AttemptCount { get; set; }

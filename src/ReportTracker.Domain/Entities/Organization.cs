@@ -22,6 +22,7 @@ public sealed class AppUser : Entity
     public required string EmployeeId { get; set; }
     public required string DisplayName { get; set; }
     public required string Email { get; set; }
+    public string? MobileNumber { get; set; }
     public Guid DivisionId { get; set; }
     public Division Division { get; set; } = null!;
     public bool IsActive { get; set; } = true;

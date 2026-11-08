@@ -29,6 +29,7 @@ public sealed class ReceiptConfirmation : Entity
 
 public sealed class EvidenceDocument : Entity
 {
+    public Guid? TrackingObligationId { get; set; }
     public Guid? SendingEventId { get; set; }
     public Guid? ExtensionRequestId { get; set; }
     public EvidencePurpose Purpose { get; set; }

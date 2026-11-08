@@ -18,7 +18,14 @@ public static class DependencyInjection
         services.AddDbContext<ReportTrackerDbContext>(options =>
             options.UseSqlServer(connectionString, sql => sql.EnableRetryOnFailure(5)));
         services.AddScoped<ITrackingService, TrackingService>();
+        services.AddScoped<ICycleGenerationService, CycleGenerationService>();
+        services.AddScoped<INotificationAutomationService, NotificationAutomationService>();
         services.AddScoped<TrackingAccess>();
+        if (configuration.GetValue("Automation:Enabled", true))
+        {
+            services.AddHostedService<OperationsAutomationWorker>();
+            services.AddHostedService<NotificationAutomationWorker>();
+        }
         return services;
     }
 }

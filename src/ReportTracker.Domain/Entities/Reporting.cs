@@ -24,6 +24,7 @@ public sealed class DefinitionVersion : Entity
     public DateOnly? EffectiveTo { get; set; }
     public Frequency Frequency { get; set; }
     public TimeOnly DueTime { get; set; }
+    public int ComponentDeadlineOffsetDays { get; set; } = 1;
     public string TimeZoneId { get; set; } = "Asia/Dhaka";
     public string? ScheduleRuleJson { get; set; }
     public bool ReceiptConfirmationRequired { get; set; }
@@ -33,11 +34,15 @@ public sealed class ComponentDefinition : Entity
 {
     public Guid DefinitionVersionId { get; set; }
     public required string Name { get; set; }
+    public string? Description { get; set; }
+    public bool IsRequired { get; set; } = true;
+    public int Sequence { get; set; }
     public Guid ProviderDivisionId { get; set; }
     public Guid? PrimaryOfficerId { get; set; }
     public Guid? DeputyOfficerId { get; set; }
     public Guid ReceivingDivisionId { get; set; }
     public bool ReceiptConfirmationRequired { get; set; }
+    public bool EvidenceRequired { get; set; }
     public string? DeadlineRuleJson { get; set; }
 }
 

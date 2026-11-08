@@ -83,6 +83,9 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
+                    b.Property<string>("MobileNumber")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .IsRequired()
@@ -249,6 +252,15 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("DeputyOfficerId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("Description")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("EvidenceRequired")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsRequired")
+                        .HasColumnType("bit");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -270,6 +282,9 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
 
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("datetime2");
@@ -334,6 +349,9 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ComponentDeadlineOffsetDays")
+                        .HasColumnType("int");
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
@@ -545,6 +563,9 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<string>("StorageKey")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid?>("TrackingObligationId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("datetime2");
@@ -826,6 +847,10 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
 
+                    b.Property<string>("Recipient")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<Guid>("ReminderPolicyId")
                         .HasColumnType("uniqueidentifier");
 
@@ -938,6 +963,9 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<bool>("DailyOverdueReminders")
+                        .HasColumnType("bit");
+
                     b.Property<TimeOnly>("DispatchTime")
                         .HasColumnType("time");
 
@@ -951,7 +979,21 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("ObligationCategory")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<TimeOnly?>("QuietHoursEnd")
+                        .HasColumnType("time");
+
+                    b.Property<TimeOnly?>("QuietHoursStart")
+                        .HasColumnType("time");
+
+                    b.Property<string>("RecipientsCsv")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
@@ -970,6 +1012,10 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("WorkingDaysCsv")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
 

@@ -9,7 +9,7 @@ BB Reporting Tracker records internal handovers and Bangladesh Bank sending even
 - `src/ReportTracker.Infrastructure`: EF Core 10, SQL Server and scoped tracking services.
 - `src/ReportTracker.Api`: ASP.NET Core 10 REST API, local sessions and optional SSO bearer validation.
 - `../ReportTracker.Web`: Angular 22 standalone client in the sibling repository.
-- `database/ReportTracker.sql`: idempotent SQL Server deployment script with three migrations and 32 domain tables.
+- `database/ReportTracker.sql`: idempotent SQL Server deployment script containing the complete current migration history.
 
 ## Configuration
 
@@ -20,6 +20,10 @@ $env:ConnectionStrings__ReportTracker = 'Server=YOUR_SERVER;Database=ReportTrack
 ```
 
 Local accounts are enabled by default. Passwords use ASP.NET Core's versioned PBKDF2 password hasher. Five failed sign-in attempts lock the account for 15 minutes. Sessions use HttpOnly cookies with an eight-hour absolute lifetime. Cookie-authenticated changes require the antiforgery header supplied by Angular.
+
+Set `EvidenceStorage__Root` to a protected server directory outside the public web root. Configure `Notifications__Email__*` for the bank SMTP relay and `Notifications__Sms__*` for the approved SMS HTTP provider. Keep provider credentials in user secrets or the deployment secret store. Outlook integration is intentionally excluded.
+
+Recurring cycle and notification workers are enabled by default. Set `Automation__Enabled=false` for schema checks, maintenance windows or read-only smoke tests; re-enable it for normal operation.
 
 ## Create or upgrade the database
 
@@ -52,14 +56,16 @@ npm ci
 npm start
 ```
 
-Open `http://localhost:4200`. The development proxy targets `http://localhost:5092`. In Visual Studio, select the `http` project profile rather than `IIS Express` to use that port. IIS Express has separate ports; using it requires a matching development proxy target and a client-server restart.
+Open `http://localhost:4200`. The default development proxy targets the repository's IIS Express profile at `http://localhost:62232`. When running the API with `dotnet run --launch-profile http` on port `5092`, start the client with `npm run start:http` instead. Restart the Angular development server after changing API profiles because proxy configuration is loaded only at startup.
 
 The first visit shows workspace setup. Create the coordinating division and initial account with a password of at least 12 characters. This account receives **two explicit roles**: System Administrator and Report Coordinator. Initial setup is permitted from a loopback connection in Development. Other environments require `Authentication__SetupKey`; enter it in the setup form. Setup closes permanently once an account exists.
 
 1. Use Administration to create divisions and user accounts. A user optionally receives a division-scoped Report Coordinator role; all active officers can record their assigned tasks.
-2. Use Report Setup to create a report definition and a reporting cycle with approved deadlines. Include at least one BB obligation and any internal handovers that actually need tracking.
-3. Assigned officers record partial or full sending, including actual time, channel and reference. Actual times are entered in Bangladesh time and stored as UTC. Sending history preserves the actor and separate system-entry timestamp.
-4. Refresh or sign in again to see persisted records. There is no demo-data fallback.
+2. Use Report Setup to create a report definition, including the main deadline time and default component lead days.
+3. Use Components and Responsibilities to define mandatory inputs, preparing and receiving divisions, officers, evidence requirements and receipt-confirmation requirements.
+4. Create a reporting cycle with exactly one final BB obligation and any internal components that need tracking. Component deadlines cannot be later than the final deadline.
+5. Assigned officers record partial or full sending, including actual time, channel and reference. Actual times are entered in Bangladesh time and stored as UTC. Sending history preserves the actor and separate system-entry timestamp.
+6. Submission Readiness is derived from the linked components and their sending, evidence and receipt states. Refresh or sign in again to see persisted records. There is no demo-data fallback.
 
 Duplicate report codes, account identifiers and report periods return HTTP 409. Sending updates include the SQL rowversion; a stale or already-completed record cannot be overwritten. The API derives the audit actor from the authenticated principal and enforces assignment or explicit scoped grants.
 
@@ -89,8 +95,8 @@ Backend tests cover assignment isolation, trusted audit identity, partial sendin
 
 ## Implementation status
 
-Implemented: local sign-in/setup/logout; division and account creation; scoped coordinator access; report definitions; manually created reporting cycles; internal/BB trackers; partial/full sending; concurrency checks; sending history; live dashboard filters; deadline agenda and sending-status monitoring.
+Implemented: local sign-in/setup/logout; division and account lifecycle administration; scoped coordinator access; report definitions and component responsibilities; Biweekly and other recurring frequencies; automatic idempotent cycle generation; linked component/final obligations; derived readiness; partial/full sending and history; confirmation-only evidence upload, signature validation, review and protected download; receipt confirmation/dispute; extension request/decision with requester-approver separation; audited status amendments; reminder policies; background email/SMS planning, delivery, retry and monitoring; reporting calendar; management analytics; and responsive role-aware operational screens.
 
-Remaining from `BB_Reporting_Tracker_Plan.md`: automatic recurring cycle generation and schedule/version editing; receipt confirmation/dispute workflows; confirmation-only evidence storage and verification; corrections; extensions and approval decisions; event amendments; delegation; reminder/delivery workers; full month/week calendar and exports; advanced management metrics; account password reset/change and deactivation; and provider-specific SSO/Outlook integration. Evidence requirements remain visible in the tracker even though evidence upload is not yet implemented.
+Deployment activities still requiring the bank environment are SMTP/SMS provider credentials and connectivity, a bank-approved malware scanner for uploaded evidence, backup/restore and disaster-recovery exercises, penetration/security testing, production accessibility review, user-acceptance testing and provider-specific SSO. Outlook integration remains intentionally deferred.
 
 

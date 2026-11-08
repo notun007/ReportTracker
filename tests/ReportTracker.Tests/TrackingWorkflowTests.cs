@@ -128,6 +128,40 @@ public sealed class TrackingWorkflowTests
         Assert.Equal(1, (await service.GetDashboardAsync(default)).MyPending);
     }
 
+    [Fact]
+    public async Task Dashboard_derives_main_report_readiness_from_completed_components()
+    {
+        var actor = Guid.NewGuid();
+        await using var provider = Provider(actor);
+        var db = provider.GetRequiredService<ReportTrackerDbContext>();
+        var main = Seed(db, actor);
+        main.Type = ObligationType.External;
+        var component = new TrackingObligation
+        {
+            Name = "Completed component", Type = ObligationType.Internal, ReportCycle = main.ReportCycle,
+            ReportCycleId = main.ReportCycleId, ParentObligationId = main.Id, AccountableDivisionId = main.AccountableDivisionId,
+            PrimaryOfficerId = actor, Recipient = "Main sender", OriginalDueAtUtc = main.OriginalDueAtUtc.AddDays(-1),
+            EffectiveDueAtUtc = main.EffectiveDueAtUtc.AddDays(-1), SendingStatus = SendingStatus.Sent,
+            EvidenceStatus = EvidenceStatus.Verified, ReceiptStatus = ReceiptStatus.ReceiptConfirmed, RowVersion = new byte[8]
+        };
+        db.Add(component);
+        await db.SaveChangesAsync();
+
+        var dashboard = await provider.GetRequiredService<ITrackingService>().GetDashboardAsync(default);
+
+        Assert.Equal(1, dashboard.ReadyForSubmission);
+        var mainRow = dashboard.Upcoming.Single(x => x.Id == main.Id);
+        Assert.True(mainRow.IsReadyForSubmission);
+        Assert.Equal(1, mainRow.RequiredComponentCount);
+        Assert.Equal(1, mainRow.CompletedComponentCount);
+    }
+
+    [Fact]
+    public void Reporting_frequency_supports_biweekly_cycles()
+    {
+        Assert.True(Enum.IsDefined(Frequency.Biweekly));
+    }
+
     private static RecordSendingCommand Command(bool partial = false) => new(DateTime.UtcNow.AddMinutes(-1), "BB", "Portal", "REF", partial,
         partial ? ["Card"] : null, null, Convert.ToBase64String(new byte[8]));
 
