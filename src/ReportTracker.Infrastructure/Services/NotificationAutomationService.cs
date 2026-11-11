@@ -74,7 +74,7 @@ internal sealed class NotificationAutomationService(ReportTrackerDbContext db, I
                 continue;
             }
             var obligation = await db.TrackingObligations.Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition).FirstAsync(x => x.Id == job.TrackingObligationId, ct);
-            var message = $"ReportTracker reminder: {obligation.ReportCycle.ReportDefinition.Name} - {obligation.Name} is due {TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(obligation.EffectiveDueAtUtc, DateTimeKind.Utc), TrackingRules.Dhaka):dd MMM yyyy HH:mm} Asia/Dhaka.";
+            var message = $"ReportTracker reminder: {obligation.ReportCycle.ReportDefinition.Name} - {TrackingRules.ObligationDisplayName(obligation.Type, obligation.Name)} is due {TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(obligation.EffectiveDueAtUtc, DateTimeKind.Utc), TrackingRules.Dhaka):dd MMM yyyy HH:mm} Asia/Dhaka.";
             var (success, reference, failure) = job.Channel == "Email"
                 ? await SendEmail(job.Recipient, "ReportTracker deadline reminder", message, ct)
                 : await SendSms(job.Recipient, message, ct);

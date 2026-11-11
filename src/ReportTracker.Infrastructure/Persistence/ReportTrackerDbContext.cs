@@ -12,6 +12,9 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
     public DbSet<LocalCredential> LocalCredentials => Set<LocalCredential>();
     public DbSet<Delegation> Delegations => Set<Delegation>();
     public DbSet<ReportDefinition> ReportDefinitions => Set<ReportDefinition>();
+    public DbSet<SubmissionRecipient> SubmissionRecipients => Set<SubmissionRecipient>();
+    public DbSet<SubmissionRecipientDepartment> SubmissionRecipientDepartments => Set<SubmissionRecipientDepartment>();
+    public DbSet<ReportSubmissionDepartment> ReportSubmissionDepartments => Set<ReportSubmissionDepartment>();
     public DbSet<DefinitionVersion> DefinitionVersions => Set<DefinitionVersion>();
     public DbSet<ComponentDefinition> ComponentDefinitions => Set<ComponentDefinition>();
     public DbSet<ReportCycle> ReportCycles => Set<ReportCycle>();
@@ -56,6 +59,19 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
         modelBuilder.Entity<LocalCredential>().HasIndex(x => x.UserId).IsUnique();
         modelBuilder.Entity<LocalCredential>().HasOne<AppUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<ReportDefinition>().HasIndex(x => x.Code).IsUnique();
+        modelBuilder.Entity<SubmissionRecipient>().Property(x => x.Name).HasMaxLength(250);
+        modelBuilder.Entity<SubmissionRecipient>().HasIndex(x => x.Name).IsUnique();
+        modelBuilder.Entity<SubmissionRecipientDepartment>().Property(x => x.Name).HasMaxLength(150);
+        modelBuilder.Entity<SubmissionRecipientDepartment>().HasIndex(x => new { x.SubmissionRecipientId, x.Name }).IsUnique();
+        modelBuilder.Entity<SubmissionRecipient>().HasMany(x => x.Departments).WithOne()
+            .HasForeignKey(x => x.SubmissionRecipientId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<ReportDefinition>().HasOne(x => x.SubmissionRecipient).WithMany()
+            .HasForeignKey(x => x.SubmissionRecipientId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<ReportSubmissionDepartment>().HasKey(x => new { x.ReportDefinitionId, x.DepartmentId });
+        modelBuilder.Entity<ReportDefinition>().HasMany(x => x.SubmissionDepartments).WithOne()
+            .HasForeignKey(x => x.ReportDefinitionId);
+        modelBuilder.Entity<ReportSubmissionDepartment>().HasOne(x => x.Department).WithMany()
+            .HasForeignKey(x => x.DepartmentId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<DefinitionVersion>().HasIndex(x => new { x.ReportDefinitionId, x.VersionNumber }).IsUnique();
         modelBuilder.Entity<ReportCycle>().HasIndex(x => new { x.ReportDefinitionId, x.PeriodKey }).IsUnique();
         modelBuilder.Entity<ChannelRequirement>().HasIndex(x => new { x.TrackingObligationId, x.Channel }).IsUnique();
@@ -70,8 +86,14 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
 
         modelBuilder.Entity<ReportDefinition>()
             .HasOne<Division>().WithMany().HasForeignKey(x => x.OwnerDivisionId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<ReportDefinition>()
+            .HasOne<Division>().WithMany().HasForeignKey(x => x.SubmittingDivisionId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<ReportDefinition>()
+            .HasOne<Division>().WithMany().HasForeignKey(x => x.ReceivingDivisionId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<TrackingObligation>()
             .HasOne<Division>().WithMany().HasForeignKey(x => x.AccountableDivisionId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<TrackingObligation>()
+            .HasOne<Division>().WithMany().HasForeignKey(x => x.ReceivingDivisionId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<TrackingObligation>()
             .HasOne(x => x.ReportCycle).WithMany(x => x.Obligations).HasForeignKey(x => x.ReportCycleId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<SendingEvent>()
@@ -81,6 +103,7 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
         modelBuilder.Entity<ReportDefinition>().Property(x => x.Code).HasMaxLength(40);
         modelBuilder.Entity<ReportCycle>().Property(x => x.PeriodKey).HasMaxLength(80);
         modelBuilder.Entity<TrackingObligation>().Property(x => x.Name).HasMaxLength(250);
+        modelBuilder.Entity<TrackingObligation>().Property(x => x.IsRequired).HasDefaultValue(true);
         modelBuilder.Entity<SendingEvent>().Property(x => x.TrackingRemarks).HasMaxLength(1000);
         modelBuilder.Entity<CorrectionCase>().Property(x => x.Explanation).HasMaxLength(1000);
         modelBuilder.Entity<AuditEvent>().Property(x => x.DataJson).HasColumnType("nvarchar(max)");

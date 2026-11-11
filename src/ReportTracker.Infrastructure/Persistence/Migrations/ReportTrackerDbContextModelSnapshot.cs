@@ -1103,11 +1103,20 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("OwnerDivisionId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("ReceivingDivisionId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .IsRequired()
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
+
+                    b.Property<Guid?>("SubmissionRecipientId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SubmittingDivisionId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("datetime2");
@@ -1119,7 +1128,28 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("OwnerDivisionId");
 
+                    b.HasIndex("ReceivingDivisionId");
+
+                    b.HasIndex("SubmissionRecipientId");
+
+                    b.HasIndex("SubmittingDivisionId");
+
                     b.ToTable("ReportDefinitions", "tracker");
+                });
+
+            modelBuilder.Entity("ReportTracker.Domain.Entities.ReportSubmissionDepartment", b =>
+                {
+                    b.Property<Guid>("ReportDefinitionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("DepartmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("ReportDefinitionId", "DepartmentId");
+
+                    b.HasIndex("DepartmentId");
+
+                    b.ToTable("ReportSubmissionDepartments", "tracker");
                 });
 
             modelBuilder.Entity("ReportTracker.Domain.Entities.ResponsibilityAssignment", b =>
@@ -1343,6 +1373,71 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.ToTable("StatusAmendments", "tracker");
                 });
 
+            modelBuilder.Entity("ReportTracker.Domain.Entities.SubmissionRecipient", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("nvarchar(250)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("SubmissionRecipients", "tracker");
+                });
+
+            modelBuilder.Entity("ReportTracker.Domain.Entities.SubmissionRecipientDepartment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<Guid>("SubmissionRecipientId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubmissionRecipientId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("SubmissionRecipientDepartments", "tracker");
+                });
+
             modelBuilder.Entity("ReportTracker.Domain.Entities.Team", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1405,6 +1500,11 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<int>("ExceptionStatus")
                         .HasColumnType("int");
 
+                    b.Property<bool>("IsRequired")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(250)
@@ -1421,6 +1521,9 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
 
                     b.Property<int>("ReceiptStatus")
                         .HasColumnType("int");
+
+                    b.Property<Guid?>("ReceivingDivisionId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Recipient")
                         .IsRequired()
@@ -1447,6 +1550,8 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("AccountableDivisionId");
+
+                    b.HasIndex("ReceivingDivisionId");
 
                     b.HasIndex("ReportCycleId");
 
@@ -1552,6 +1657,40 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                         .HasForeignKey("OwnerDivisionId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("ReportTracker.Domain.Entities.Division", null)
+                        .WithMany()
+                        .HasForeignKey("ReceivingDivisionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("ReportTracker.Domain.Entities.SubmissionRecipient", "SubmissionRecipient")
+                        .WithMany()
+                        .HasForeignKey("SubmissionRecipientId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("ReportTracker.Domain.Entities.Division", null)
+                        .WithMany()
+                        .HasForeignKey("SubmittingDivisionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("SubmissionRecipient");
+                });
+
+            modelBuilder.Entity("ReportTracker.Domain.Entities.ReportSubmissionDepartment", b =>
+                {
+                    b.HasOne("ReportTracker.Domain.Entities.SubmissionRecipientDepartment", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("ReportTracker.Domain.Entities.ReportDefinition", null)
+                        .WithMany("SubmissionDepartments")
+                        .HasForeignKey("ReportDefinitionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Department");
                 });
 
             modelBuilder.Entity("ReportTracker.Domain.Entities.SendingEvent", b =>
@@ -1563,6 +1702,15 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("TrackingObligation");
+                });
+
+            modelBuilder.Entity("ReportTracker.Domain.Entities.SubmissionRecipientDepartment", b =>
+                {
+                    b.HasOne("ReportTracker.Domain.Entities.SubmissionRecipient", null)
+                        .WithMany("Departments")
+                        .HasForeignKey("SubmissionRecipientId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ReportTracker.Domain.Entities.Team", b =>
@@ -1583,6 +1731,11 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                         .HasForeignKey("AccountableDivisionId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("ReportTracker.Domain.Entities.Division", null)
+                        .WithMany()
+                        .HasForeignKey("ReceivingDivisionId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("ReportTracker.Domain.Entities.ReportCycle", "ReportCycle")
                         .WithMany("Obligations")
@@ -1610,7 +1763,14 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("ReportTracker.Domain.Entities.ReportDefinition", b =>
                 {
+                    b.Navigation("SubmissionDepartments");
+
                     b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("ReportTracker.Domain.Entities.SubmissionRecipient", b =>
+                {
+                    b.Navigation("Departments");
                 });
 
             modelBuilder.Entity("ReportTracker.Domain.Entities.TrackingObligation", b =>

@@ -26,7 +26,7 @@ public sealed class ExtensionsController(ReportTrackerDbContext db, TrackingAcce
             join user in db.Users on extension.RequestedByUserId equals user.Id
             where authorized.Contains(obligation.Id)
             orderby extension.CreatedAtUtc descending
-            select new ExtensionItem(extension.Id, obligation.Id, report.Name, obligation.Name, cycle.PeriodLabel,
+            select new ExtensionItem(extension.Id, obligation.Id, report.Name, TrackingRules.ObligationDisplayName(obligation.Type, obligation.Name), cycle.PeriodLabel,
                 extension.OriginalDueAtUtc, extension.RequestedDueAtUtc, extension.Reason, extension.PermissionReference,
                 user.DisplayName, extension.Status.ToString(), extension.CreatedAtUtc, extension.DecidedAtUtc, extension.DecisionReason)).ToListAsync(ct);
         return Ok(rows.Select(x => x with
@@ -135,7 +135,7 @@ public sealed class RemindersController(ReportTrackerDbContext db, TrackingAcces
             join delivery in db.NotificationDeliveries on job.Id equals delivery.NotificationJobId into deliveries
             from delivery in deliveries.OrderByDescending(x => x.AttemptedAtUtc).Take(1).DefaultIfEmpty()
             orderby job.DueAtUtc descending
-            select new NotificationItem(job.Id, obligation.Id, report.Name, obligation.Name, job.Recipient, job.Channel,
+            select new NotificationItem(job.Id, obligation.Id, report.Name, TrackingRules.ObligationDisplayName(obligation.Type, obligation.Name), job.Recipient, job.Channel,
                 job.DueAtUtc, job.Status, job.AttemptCount, delivery == null ? null : delivery.AttemptedAtUtc,
                 delivery == null ? null : delivery.Succeeded, delivery == null ? null : delivery.ProviderReference,
                 delivery == null ? null : delivery.FailureReason)).Take(take).ToListAsync(ct);
@@ -174,7 +174,7 @@ public sealed class OperationsInsightsController(ReportTrackerDbContext db, Trac
         var divisions = await db.Divisions.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
         var extensionIds = await db.ExtensionRequests.AsNoTracking().Where(x => x.Status == ExtensionStatus.Approved && rows.Select(r => r.Id).Contains(x.TrackingObligationId))
             .Select(x => x.TrackingObligationId).ToHashSetAsync(ct);
-        return Ok(rows.Select(x => new CalendarItem(x.Id, x.ReportCycleId, x.ReportCycle.ReportDefinition.Name, x.Name,
+        return Ok(rows.Select(x => new CalendarItem(x.Id, x.ReportCycleId, x.ReportCycle.ReportDefinition.Name, TrackingRules.ObligationDisplayName(x.Type, x.Name),
             x.ReportCycle.PeriodLabel, x.Type == ObligationType.External ? "Main report" : "Component",
             divisions.GetValueOrDefault(x.AccountableDivisionId, "Unknown division"), DateTime.SpecifyKind(x.EffectiveDueAtUtc, DateTimeKind.Utc),
             TrackingRules.Timeliness(x.EffectiveDueAtUtc, x.SendingStatus == SendingStatus.Sent ? x.UpdatedAtUtc : null, now),

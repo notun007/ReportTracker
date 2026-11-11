@@ -3,16 +3,49 @@ using ReportTracker.Domain.Enums;
 
 namespace ReportTracker.Domain.Entities;
 
+public sealed class SubmissionRecipient : Entity
+{
+    public required string Name { get; set; }
+    public ICollection<SubmissionRecipientDepartment> Departments { get; set; } = [];
+}
+
+public sealed class SubmissionRecipientDepartment : Entity
+{
+    public Guid SubmissionRecipientId { get; set; }
+    public required string Name { get; set; }
+}
+
+public sealed class ReportSubmissionDepartment
+{
+    public Guid ReportDefinitionId { get; set; }
+    public Guid DepartmentId { get; set; }
+    public SubmissionRecipientDepartment Department { get; set; } = null!;
+}
+
 public sealed class ReportDefinition : Entity
 {
     public required string Code { get; set; }
     public required string Name { get; set; }
     public string? Description { get; set; }
     public Guid OwnerDivisionId { get; set; }
+    public Guid? SubmittingDivisionId { get; set; }
+    public Guid? ReceivingDivisionId { get; set; }
     public required string BbRecipient { get; set; }
+    public Guid? SubmissionRecipientId { get; set; }
+    public SubmissionRecipient? SubmissionRecipient { get; set; }
+    public ICollection<ReportSubmissionDepartment> SubmissionDepartments { get; set; } = [];
     public string? InstructionReference { get; set; }
     public bool IsActive { get; set; } = true;
     public ICollection<DefinitionVersion> Versions { get; set; } = [];
+
+    public string SubmissionDestination() => FormatSubmissionDestination(SubmissionRecipient?.Name ?? BbRecipient,
+        SubmissionDepartments.Select(x => x.Department.Name));
+
+    public static string FormatSubmissionDestination(string organization, IEnumerable<string> departmentNames)
+    {
+        var departments = departmentNames.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        return departments.Length == 0 ? organization : $"{organization} — {string.Join("; ", departments)}";
+    }
 }
 
 public sealed class DefinitionVersion : Entity
@@ -60,6 +93,7 @@ public sealed class ReportCycle : Entity
 
 public sealed class TrackingObligation : Entity
 {
+    public bool IsRequired { get; set; } = true;
     public Guid ReportCycleId { get; set; }
     public ReportCycle ReportCycle { get; set; } = null!;
     public Guid? ParentObligationId { get; set; }
@@ -67,6 +101,7 @@ public sealed class TrackingObligation : Entity
     public ObligationType Type { get; set; }
     public required string Name { get; set; }
     public Guid AccountableDivisionId { get; set; }
+    public Guid? ReceivingDivisionId { get; set; }
     public Guid? PrimaryOfficerId { get; set; }
     public Guid? DeputyOfficerId { get; set; }
     public required string Recipient { get; set; }

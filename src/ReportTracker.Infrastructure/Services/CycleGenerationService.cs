@@ -18,11 +18,13 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
     {
         var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TrackingRules.Dhaka));
         if (throughLocalDate < today || throughLocalDate > today.AddYears(2)) throw new TrackingValidationException("Generate cycles from today through at most two years ahead.");
-        var reports = await db.ReportDefinitions.Where(x => x.IsActive).Include(x => x.Versions).ToListAsync(ct);
+        var reports = await db.ReportDefinitions.Where(x => x.IsActive).Include(x => x.Versions).Include(x => x.SubmissionRecipient)
+            .Include(x => x.SubmissionDepartments).ThenInclude(x => x.Department).AsSplitQuery().ToListAsync(ct);
         var reportIds = reports.Select(x => x.Id).ToArray();
         var assignments = await db.ResponsibilityAssignments.Where(x => reportIds.Contains(x.ReportDefinitionId) && x.ResponsibilityType == "MainSender" &&
             x.EffectiveFromUtc <= DateTime.UtcNow && (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc >= DateTime.UtcNow)).ToListAsync(ct);
-        var fallbackUsers = await db.Users.Where(x => x.IsActive).OrderBy(x => x.DisplayName).ToListAsync(ct);
+        var activeUsers = await db.Users.Where(x => x.IsActive).ToListAsync(ct);
+        var activeDivisions = await db.Divisions.Where(x => x.IsActive).Select(x => x.Id).ToListAsync(ct);
         var existing = await db.ReportCycles.Where(x => reportIds.Contains(x.ReportDefinitionId)).Select(x => new { x.ReportDefinitionId, x.PeriodKey }).ToListAsync(ct);
         var existingKeys = existing.Select(x => $"{x.ReportDefinitionId:N}:{x.PeriodKey}").ToHashSet();
         var warnings = new List<string>();
@@ -35,9 +37,17 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             if (version is null || version.Frequency == Frequency.AdHoc) continue;
             var components = await db.ComponentDefinitions.Where(x => x.DefinitionVersionId == version.Id).OrderBy(x => x.Sequence).ToListAsync(ct);
             var mainAssignment = assignments.Where(x => x.ReportDefinitionId == report.Id).OrderByDescending(x => x.EffectiveFromUtc).FirstOrDefault();
-            var mainOfficerId = mainAssignment?.PrimaryOfficerId ?? fallbackUsers.FirstOrDefault(x => x.DivisionId == report.OwnerDivisionId)?.Id;
-            if (!mainOfficerId.HasValue) { warnings.Add($"{report.Code}: no active main sender in the submitting division."); continue; }
-            if (components.Any(x => !x.PrimaryOfficerId.HasValue)) { warnings.Add($"{report.Code}: one or more components have no primary officer."); continue; }
+            if (!activeDivisions.Contains(report.OwnerDivisionId) || !report.SubmittingDivisionId.HasValue || !activeDivisions.Contains(report.SubmittingDivisionId.Value) ||
+                mainAssignment is null || mainAssignment.DivisionId != report.SubmittingDivisionId ||
+                !activeUsers.Any(x => x.Id == mainAssignment.PrimaryOfficerId && x.DivisionId == report.SubmittingDivisionId) ||
+                (mainAssignment.DeputyOfficerId.HasValue && !activeUsers.Any(x => x.Id == mainAssignment.DeputyOfficerId && x.DivisionId == report.SubmittingDivisionId)))
+            { warnings.Add($"{report.Code}: configure an active coordinating division, final submitting division and final submitting officers in Report responsibilities."); continue; }
+            var mainOfficerId = mainAssignment.PrimaryOfficerId;
+            var destination = report.SubmissionDestination();
+            if (components.Any(c => !activeDivisions.Contains(c.ProviderDivisionId) || !activeDivisions.Contains(report.ReceivingDivisionId ?? c.ReceivingDivisionId) ||
+                !activeUsers.Any(x => x.Id == c.PrimaryOfficerId && x.DivisionId == c.ProviderDivisionId) ||
+                (c.DeputyOfficerId.HasValue && !activeUsers.Any(x => x.Id == c.DeputyOfficerId && x.DivisionId == c.ProviderDivisionId))))
+            { warnings.Add($"{report.Code}: one or more components need active preparing/receiving divisions and preparing officers."); continue; }
             var periods = Periods(version.Frequency, today, throughLocalDate).DistinctBy(x => x.Key).ToList();
             foreach (var period in periods)
             {
@@ -51,9 +61,9 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                 var mainDueUtc = TimeZoneInfo.ConvertTimeToUtc(localDue, TrackingRules.Dhaka);
                 var cycle = new ReportCycle { ReportDefinitionId = report.Id, DefinitionVersionId = version.Id, PeriodKey = period.Key,
                     PeriodLabel = period.Label, PeriodStart = period.Start, PeriodEnd = period.End };
-                var main = new TrackingObligation { ReportCycleId = cycle.Id, Type = ObligationType.External, Name = "Final regulatory submission",
-                    AccountableDivisionId = report.OwnerDivisionId, PrimaryOfficerId = mainOfficerId, DeputyOfficerId = mainAssignment?.DeputyOfficerId,
-                    Recipient = report.BbRecipient, OriginalDueAtUtc = mainDueUtc, EffectiveDueAtUtc = mainDueUtc,
+                var main = new TrackingObligation { ReportCycleId = cycle.Id, Type = ObligationType.External, Name = TrackingRules.FinalSubmissionName,
+                    AccountableDivisionId = report.SubmittingDivisionId.Value, PrimaryOfficerId = mainOfficerId, DeputyOfficerId = mainAssignment.DeputyOfficerId,
+                    Recipient = destination, OriginalDueAtUtc = mainDueUtc, EffectiveDueAtUtc = mainDueUtc,
                     ReceiptStatus = version.ReceiptConfirmationRequired ? ReceiptStatus.AwaitingConfirmation : ReceiptStatus.NotRequired,
                     EvidenceStatus = EvidenceStatus.Missing };
                 cycle.Obligations.Add(main);
@@ -62,8 +72,9 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                     var leadDays = component.DeadlineRuleJson is null ? version.ComponentDeadlineOffsetDays : ParseOffset(component.DeadlineRuleJson, version.ComponentDeadlineOffsetDays);
                     var dueUtc = mainDueUtc.AddDays(-leadDays);
                     cycle.Obligations.Add(new TrackingObligation { ReportCycleId = cycle.Id, ParentObligationId = main.Id, Type = ObligationType.Internal,
-                        Name = component.Name, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
-                        DeputyOfficerId = component.DeputyOfficerId, Recipient = component.ReceivingDivisionId.ToString(), OriginalDueAtUtc = dueUtc,
+                        Name = component.Name, IsRequired = component.IsRequired, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
+                        DeputyOfficerId = component.DeputyOfficerId, ReceivingDivisionId = report.ReceivingDivisionId ?? component.ReceivingDivisionId,
+                        Recipient = (report.ReceivingDivisionId ?? component.ReceivingDivisionId).ToString(), OriginalDueAtUtc = dueUtc,
                         EffectiveDueAtUtc = dueUtc, ReceiptStatus = component.ReceiptConfirmationRequired ? ReceiptStatus.AwaitingConfirmation : ReceiptStatus.NotRequired,
                         EvidenceStatus = component.EvidenceRequired ? EvidenceStatus.Missing : EvidenceStatus.NotRequired } );
                     componentsCreated++;

@@ -32,12 +32,15 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
         var report = await db.ReportDefinitions.FirstOrDefaultAsync(x => x.Id == reportId && x.IsActive, ct);
         if (report is null) return NotFound();
         await access.RequireAsync("reports.manage", report.OwnerDivisionId, reportId, ct);
+        if (report.ReceivingDivisionId.HasValue && request.ReceivingDivisionId != report.ReceivingDivisionId)
+            throw new TrackingValidationException("Components must use the receiving division configured on the report.");
+        var version = await db.DefinitionVersions.Where(x => x.ReportDefinitionId == reportId)
+            .OrderByDescending(x => x.VersionNumber).FirstAsync(ct);
+        request = request with { DeadlineOffsetDays = version.ComponentDeadlineOffsetDays };
         await ValidateAssignment(request, ct);
-        var versionId = await db.DefinitionVersions.Where(x => x.ReportDefinitionId == reportId)
-            .OrderByDescending(x => x.VersionNumber).Select(x => x.Id).FirstAsync(ct);
         var component = new ComponentDefinition
         {
-            DefinitionVersionId = versionId,
+            DefinitionVersionId = version.Id,
             Name = request.Name.Trim(),
             Description = request.Description?.Trim(),
             IsRequired = request.IsRequired,
@@ -62,14 +65,8 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
 
     private async Task ValidateAssignment(SaveComponentRequest request, CancellationToken ct)
     {
-        var divisions = await db.Divisions.Where(x => x.IsActive && (x.Id == request.ProviderDivisionId || x.Id == request.ReceivingDivisionId))
-            .Select(x => x.Id).ToListAsync(ct);
-        if (!divisions.Contains(request.ProviderDivisionId) || !divisions.Contains(request.ReceivingDivisionId))
-            throw new TrackingValidationException("Choose active preparing and receiving divisions.");
-        if (request.PrimaryOfficerId.HasValue && !await db.Users.AnyAsync(x => x.Id == request.PrimaryOfficerId && x.DivisionId == request.ProviderDivisionId && x.IsActive, ct))
-            throw new TrackingValidationException("The primary officer must be an active member of the preparing division.");
-        if (request.DeputyOfficerId.HasValue && !await db.Users.AnyAsync(x => x.Id == request.DeputyOfficerId && x.DivisionId == request.ProviderDivisionId && x.IsActive, ct))
-            throw new TrackingValidationException("The deputy officer must be an active member of the preparing division.");
+        await ComponentValidation.ValidateAsync(db, request.Name, request.Description, request.Sequence, request.ProviderDivisionId,
+            request.ReceivingDivisionId, request.PrimaryOfficerId, request.DeputyOfficerId, request.DeadlineOffsetDays, ct);
     }
 
     private static ComponentItem ToItem(ComponentDefinition row)
@@ -110,11 +107,12 @@ public sealed class ReadinessController(ReportTrackerDbContext db, TrackingAcces
             x.Id, x.Name, divisions.GetValueOrDefault(x.AccountableDivisionId, "Unknown division"),
             users.GetValueOrDefault(x.PrimaryOfficerId ?? Guid.Empty, "Unassigned"), DateTime.SpecifyKind(x.EffectiveDueAtUtc, DateTimeKind.Utc),
             TrackingRules.Timeliness(x.EffectiveDueAtUtc, x.SendingStatus == SendingStatus.Sent ? x.UpdatedAtUtc : null, now),
-            Label(x.SendingStatus), Label(x.EvidenceStatus), Label(x.ReceiptStatus), !Complete(x))).ToList();
-        var completed = rows.Count(x => !x.IsBlocking);
+            Label(x.SendingStatus), Label(x.EvidenceStatus), Label(x.ReceiptStatus), x.IsRequired && !Complete(x))).ToList();
+        var required = components.Count(x => x.IsRequired);
+        var completed = components.Count(x => x.IsRequired && Complete(x));
         return Ok(new SubmissionReadinessDto(cycleId, main.Id, main.ReportCycle.ReportDefinition.Name, main.ReportCycle.PeriodLabel,
-            DateTime.SpecifyKind(main.EffectiveDueAtUtc, DateTimeKind.Utc), rows.Count, completed, rows.Count - completed,
-            rows.Count > 0 && completed == rows.Count, rows));
+            DateTime.SpecifyKind(main.EffectiveDueAtUtc, DateTimeKind.Utc), required, completed, required - completed,
+            components.Count > 0 && completed == required, rows));
     }
 
     private static bool Complete(TrackingObligation x) =>

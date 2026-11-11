@@ -1,6 +1,6 @@
 # ReportTracker
 
-BB Reporting Tracker records internal handovers and Bangladesh Bank sending events. It stores tracking metadata, not business report datasets, report files, email bodies or report attachments.
+Reporting Tracker records internal handovers and final submissions to configured recipient organizations. It stores tracking metadata, not business report datasets, report files, email bodies or report attachments.
 
 ## Projects
 
@@ -60,14 +60,24 @@ Open `http://localhost:4200`. The default development proxy targets the reposito
 
 The first visit shows workspace setup. Create the coordinating division and initial account with a password of at least 12 characters. This account receives **two explicit roles**: System Administrator and Report Coordinator. Initial setup is permitted from a loopback connection in Development. Other environments require `Authentication__SetupKey`; enter it in the setup form. Setup closes permanently once an account exists.
 
-1. Use Administration to create divisions and user accounts. A user optionally receives a division-scoped Report Coordinator role; all active officers can record their assigned tasks.
-2. Use Report Setup to create a report definition, including the main deadline time and default component lead days.
+1. Use Administration to create divisions, user accounts, submission recipients and recipient departments. A user optionally receives a division-scoped Report Coordinator role; all active officers can record their assigned tasks.
+2. Use Report Setup to create a report definition with a submission recipient, one or more of its departments, a main deadline time and deadline lead days. To configure an existing report, use its **Submission destination** action. A cycle still has one final submission; its destination records the organization and all selected departments. Destination changes affect new cycles and preserve existing cycle and submission records. The directory migration imports existing recipient names and leaves their department selections unset.
 3. Use Components and Responsibilities to define mandatory inputs, preparing and receiving divisions, officers, evidence requirements and receipt-confirmation requirements.
 4. Create a reporting cycle with exactly one final BB obligation and any internal components that need tracking. Component deadlines cannot be later than the final deadline.
 5. Assigned officers record partial or full sending, including actual time, channel and reference. Actual times are entered in Bangladesh time and stored as UTC. Sending history preserves the actor and separate system-entry timestamp.
 6. Submission Readiness is derived from the linked components and their sending, evidence and receipt states. Refresh or sign in again to see persisted records. There is no demo-data fallback.
 
+Submission controls show actions for the current user's responsibility. Sending officers (or explicitly scoped recording delegates) upload confirmation evidence. A coordinator with `reports.manage` for that report reviews another officer's evidence; uploaders cannot verify their own proof. Internal receipt confirmation belongs to active officers in the task's receiving division and excludes its assigned senders and officers who recorded its sending events. Those receiving officers can read the incoming task and its history without gaining sending, upload or amendment access. For final BB tasks, a separate report coordinator records the actual BB acknowledgment. Receipt time cannot precede sending time.
+
+Recurring components copy their configured receiving division into each new task. Manual internal tasks requiring receipt confirmation must specify a receiving division. For older internal tasks, a coordinator can use **Manage → Receipt history → Receiving responsibility** to assign it. Existing explicit division GUID recipients are migrated automatically; free-text recipients are not used to guess receipt authority. Evidence and receipt histories remain available to authorized readers, with forms and review buttons shown only when the API grants the corresponding action.
+
 Duplicate report codes, account identifiers and report periods return HTTP 409. Sending updates include the SQL rowversion; a stale or already-completed record cannot be overwritten. The API derives the audit actor from the authenticated principal and enforces assignment or explicit scoped grants.
+
+Report responsibilities distinguish four functions: component preparing division, component receiving division, report coordinating division, and final submitting division. For example, A and B prepare components, C receives them and coordinates the report, and D submits to BB. Coordinating and final submitting divisions may be the same or different. In the API/database, the existing `OwnerDivisionId` remains the coordinating division for compatibility; it is no longer used as the automatic final submitting division.
+
+Create report now includes a common receiving division and an **Add component** side panel. The panel uses the component name, description, preparing division, primary/deputy officers, deadline lead days, display order, mandatory flag and receipt/evidence requirements. Components inherit the report's receiving division and appear as editable/removable drafts before submission. Preparing divisions are summarized from those drafts. One Create report request validates the entire bundle, then persists the report, definition version, submitting assignment, components and audits in a single EF Core SaveChanges transaction; failed validation preserves the client draft and creates no partial report. The separate Components and Responsibilities screen remains available after creation and enforces the common receiving division for new reports. Legacy reports with no common receiver retain their existing per-component assignments.
+
+Set the coordinating division, final submitting division, primary submitting officer and optional deputy in **Report Setup → Create report**. This form is for creation only; an existing-report editing interface is deferred. The responsibilities API remains available for authorized configuration updates. Officers must be active members of the selected final submitting division. Automatic generation uses these explicit assignments and warns/skips a report with missing or invalid assignments instead of choosing an arbitrary officer. Manual final BB tasks must use the configured final submitting division and prefill its configured officers. Responsibility changes affect new cycles; existing task divisions, assigned officers and history are preserved. Migration preserves an existing valid MainSender division when present, otherwise the previous coordinating division is retained as the legacy final submitting division; it does not invent an officer assignment.
 
 ## Future bank SSO
 

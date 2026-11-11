@@ -1,3 +1,5 @@
+using ReportTracker.Domain.Enums;
+
 namespace ReportTracker.Application.Contracts;
 
 public sealed class TrackingValidationException(string message) : Exception(message);
@@ -5,6 +7,13 @@ public sealed class TrackingConflictException(string message) : Exception(messag
 
 public static class TrackingRules
 {
+    public const string FinalSubmissionName = "Final submission";
+
+    public static string ObligationDisplayName(ObligationType type, string name) =>
+        type == ObligationType.External && name is ("BB submission" or "Final regulatory submission")
+            ? FinalSubmissionName
+            : name;
+
     public static readonly TimeZoneInfo Dhaka = TimeZoneInfo.FindSystemTimeZoneById("Asia/Dhaka");
 
     public static string Timeliness(DateTime dueUtc, DateTime? actualSentUtc, DateTime nowUtc)
@@ -20,8 +29,8 @@ public static class TrackingRules
     {
         if (command.ActualSentAtUtc.Kind != DateTimeKind.Utc || command.ActualSentAtUtc < new DateTime(2000, 1, 1) || command.ActualSentAtUtc > nowUtc.AddMinutes(5))
             throw new TrackingValidationException("Enter a valid actual sending time in UTC that is not in the future.");
-        if (string.IsNullOrWhiteSpace(command.Recipient) || command.Recipient.Length > 250)
-            throw new TrackingValidationException("Recipient is required and must be at most 250 characters.");
+        if (string.IsNullOrWhiteSpace(command.Recipient) || command.Recipient.Length > 4000)
+            throw new TrackingValidationException("Recipient is required and must be at most 4000 characters.");
         if (command.Channel is not ("Portal" or "Email" or "Physical letter" or "Other"))
             throw new TrackingValidationException("Choose a supported sending channel.");
         if (command.Reference?.Length > 250 || command.TrackingRemarks?.Length > 1000)

@@ -24,18 +24,72 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
         [".jpeg"] = ("image/jpeg", [0xFF, 0xD8, 0xFF])
     };
 
+    [HttpGet("actions")]
+    public async Task<ActionResult<ObligationActions>> Actions(Guid obligationId, CancellationToken ct)
+    {
+        await access.EnsureActiveAsync(ct);
+        var obligation = await access.AuthorizedObligations().AsNoTracking().Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition)
+            .FirstOrDefaultAsync(x => x.Id == obligationId, ct);
+        if (obligation is null) return NotFound();
+        var writable = await access.AuthorizedObligations(true).AnyAsync(x => x.Id == obligationId, ct);
+        var reviewer = await access.HasAsync("reports.manage", obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        var hasSending = await db.SendingEvents.AnyAsync(x => x.TrackingObligationId == obligationId && !x.IsReversed, ct);
+        var canReceive = hasSending && await access.AuthorizedReceiptObligations().AnyAsync(x => x.Id == obligationId, ct);
+        var receiverName = await db.Divisions.Where(x => x.Id == obligation.ReceivingDivisionId).Select(x => x.Name).FirstOrDefaultAsync(ct);
+        var canAssign = reviewer && obligation.Type == ObligationType.Internal && !obligation.ReportCycle.ReportDefinition.ReceivingDivisionId.HasValue;
+        var divisions = canAssign ? await db.Divisions.Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => new LookupItem(x.Id, x.Name)).ToListAsync(ct) : [];
+        return Ok(new ObligationActions(writable, canReceive, reviewer, writable, obligation.Type == ObligationType.External,
+            hasSending, obligation.ReceivingDivisionId, receiverName, canAssign, divisions));
+    }
+
+    [HttpPatch("receiving-division")]
+    public async Task<IActionResult> AssignReceiver(Guid obligationId, AssignReceivingDivisionRequest request, CancellationToken ct)
+    {
+        var obligation = await db.TrackingObligations.Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition).FirstOrDefaultAsync(x => x.Id == obligationId, ct);
+        if (obligation is null) return NotFound();
+        await access.RequireAsync("reports.manage", obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        if (obligation.Type != ObligationType.Internal) throw new TrackingValidationException("Receiving division applies to internal tasks only.");
+        if (obligation.ReportCycle.ReportDefinition.ReceivingDivisionId is Guid receiver && request.ReceivingDivisionId != receiver)
+            throw new TrackingValidationException("Use the receiving division configured on the report.");
+        if (!await db.Divisions.AnyAsync(x => x.Id == request.ReceivingDivisionId && x.IsActive, ct))
+            throw new TrackingValidationException("Choose an active receiving division.");
+        var previous = obligation.ReceivingDivisionId;
+        obligation.ReceivingDivisionId = request.ReceivingDivisionId;
+        Audit(nameof(TrackingObligation), obligationId, "ReceivingDivisionAssigned", new { previous, request.ReceivingDivisionId });
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpGet("receipts")]
+    public async Task<ActionResult<IReadOnlyList<ReceiptItem>>> Receipts(Guid obligationId, CancellationToken ct)
+    {
+        await access.EnsureActiveAsync(ct);
+        if (!await access.AuthorizedObligations().AnyAsync(x => x.Id == obligationId, ct)) return NotFound();
+        var rows = await (from receipt in db.ReceiptConfirmations.AsNoTracking()
+            join sending in db.SendingEvents on receipt.SendingEventId equals sending.Id
+            join actor in db.Users on receipt.ActingUserId equals actor.Id
+            where sending.TrackingObligationId == obligationId
+            orderby receipt.CreatedAtUtc descending
+            select new ReceiptItem(receipt.Id, sending.Id, receipt.ReceivedAtUtc, receipt.IsDisputed, receipt.Reason, receipt.CreatedAtUtc, actor.DisplayName)).ToListAsync(ct);
+        return Ok(rows.Select(x => x with { ReceivedAtUtc = DateTime.SpecifyKind(x.ReceivedAtUtc, DateTimeKind.Utc), RecordedAtUtc = DateTime.SpecifyKind(x.RecordedAtUtc, DateTimeKind.Utc) }).ToList());
+    }
+
     [HttpGet("evidence")]
     public async Task<ActionResult<IReadOnlyList<EvidenceItem>>> Evidence(Guid obligationId, CancellationToken ct)
     {
+        await access.EnsureActiveAsync(ct);
         if (!await access.AuthorizedObligations().AnyAsync(x => x.Id == obligationId, ct)) return NotFound();
+        var scope = await db.TrackingObligations.Where(x => x.Id == obligationId).Select(x => new { x.ReportCycle.ReportDefinition.OwnerDivisionId, x.ReportCycle.ReportDefinitionId }).SingleAsync(ct);
+        var canReview = await access.HasAsync("reports.manage", scope.OwnerDivisionId, scope.ReportDefinitionId, ct);
         var rows = await EvidenceQuery(obligationId).ToListAsync(ct);
-        return Ok(rows.Select(NormalizeEvidence));
+        return Ok(rows.Select(x => NormalizeEvidence(x) with { CanReview = canReview && x.UploadedByUserId != access.UserId && x.Status == "Provided" }).ToList());
     }
 
     [HttpPost("evidence")]
     [RequestSizeLimit(10_485_760)]
     public async Task<ActionResult<EvidenceItem>> UploadEvidence(Guid obligationId, IFormFile file, CancellationToken ct)
     {
+        await access.EnsureActiveAsync(ct);
         var obligation = await access.AuthorizedObligations(true).Include(x => x.SendingEvents).FirstOrDefaultAsync(x => x.Id == obligationId, ct);
         if (obligation is null) return NotFound();
         if (file.Length is <= 0 or > 10_485_760) throw new TrackingValidationException("Evidence must be between 1 byte and 10 MB.");
@@ -71,13 +125,15 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
     [HttpPost("receipts")]
     public async Task<ActionResult<ReceiptItem>> ConfirmReceipt(Guid obligationId, ReceiptRequest request, CancellationToken ct)
     {
-        var obligation = await access.AuthorizedObligations(true).Include(x => x.SendingEvents).FirstOrDefaultAsync(x => x.Id == obligationId, ct);
+        await access.EnsureActiveAsync(ct);
+        var obligation = await access.AuthorizedReceiptObligations().Include(x => x.SendingEvents).FirstOrDefaultAsync(x => x.Id == obligationId, ct);
         if (obligation is null) return NotFound();
         if (request.ReceivedAtUtc.Kind != DateTimeKind.Utc || request.ReceivedAtUtc > DateTime.UtcNow.AddMinutes(5))
             throw new TrackingValidationException("Enter a valid receipt time in UTC.");
         if (request.IsDisputed && string.IsNullOrWhiteSpace(request.Reason)) throw new TrackingValidationException("A dispute reason is required.");
         var sending = obligation.SendingEvents.Where(x => !x.IsReversed).OrderByDescending(x => x.CreatedAtUtc).FirstOrDefault()
             ?? throw new TrackingConflictException("Record a submission before confirming receipt.");
+        if (request.ReceivedAtUtc < sending.ActualSentAtUtc) throw new TrackingValidationException("Receipt time cannot be before the recorded sending time.");
         var receipt = new ReceiptConfirmation { SendingEventId = sending.Id, ActingUserId = access.UserId,
             ReceivedAtUtc = request.ReceivedAtUtc, IsDisputed = request.IsDisputed, Reason = request.Reason?.Trim() };
         db.ReceiptConfirmations.Add(receipt);
@@ -131,7 +187,7 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
         where evidence.TrackingObligationId == obligationId
         orderby evidence.CreatedAtUtc descending
         select new EvidenceItem(evidence.Id, obligationId, evidence.OriginalFileName, evidence.ContentType, evidence.SizeBytes,
-            evidence.Sha256, evidence.Status.ToString(), evidence.Purpose.ToString(), evidence.CreatedAtUtc, user.DisplayName);
+            evidence.Sha256, evidence.Status.ToString(), evidence.Purpose.ToString(), evidence.CreatedAtUtc, user.DisplayName, user.Id);
 
     private static EvidenceItem NormalizeEvidence(EvidenceItem item) => item with
     { UploadedAtUtc = DateTime.SpecifyKind(item.UploadedAtUtc, DateTimeKind.Utc) };
@@ -163,6 +219,8 @@ public sealed class EvidenceController(ReportTrackerDbContext db, TrackingAccess
         var obligation = await db.TrackingObligations.Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition).FirstOrDefaultAsync(x => x.Id == obligationId, ct);
         if (obligation is null) return NotFound();
         await access.RequireAsync("reports.manage", obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        if (evidence.UploadedByUserId == access.UserId) throw new TrackingConflictException("Another authorized coordinator must review your evidence.");
+        if (evidence.Status != EvidenceStatus.Provided) throw new TrackingConflictException("Only evidence awaiting review can be verified or rejected.");
         if (!Enum.TryParse<EvidenceStatus>(request.Decision, true, out var decision) || decision is not (EvidenceStatus.Verified or EvidenceStatus.Rejected))
             throw new TrackingValidationException("Choose Verified or Rejected.");
         evidence.Status = decision;

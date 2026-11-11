@@ -1017,3 +1017,297 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261109191357_ReceivingDivisionResponsibilities'
+)
+BEGIN
+    ALTER TABLE [tracker].[TrackingObligations] ADD [ReceivingDivisionId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261109191357_ReceivingDivisionResponsibilities'
+)
+BEGIN
+    CREATE INDEX [IX_TrackingObligations_ReceivingDivisionId] ON [tracker].[TrackingObligations] ([ReceivingDivisionId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261109191357_ReceivingDivisionResponsibilities'
+)
+BEGIN
+    ALTER TABLE [tracker].[TrackingObligations] ADD CONSTRAINT [FK_TrackingObligations_Divisions_ReceivingDivisionId] FOREIGN KEY ([ReceivingDivisionId]) REFERENCES [tracker].[Divisions] ([Id]) ON DELETE NO ACTION;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261109191357_ReceivingDivisionResponsibilities'
+)
+BEGIN
+    UPDATE obligation
+    SET ReceivingDivisionId = division.Id
+    FROM tracker.TrackingObligations AS obligation
+    INNER JOIN tracker.Divisions AS division ON division.Id = TRY_CONVERT(uniqueidentifier, obligation.Recipient)
+    WHERE obligation.Type = 1 AND obligation.ReceivingDivisionId IS NULL AND LEN(obligation.Recipient) = 36;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261109191357_ReceivingDivisionResponsibilities'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261109191357_ReceivingDivisionResponsibilities', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110192740_SeparateCoordinatingAndSubmittingDivisions'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReportDefinitions] ADD [SubmittingDivisionId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110192740_SeparateCoordinatingAndSubmittingDivisions'
+)
+BEGIN
+    UPDATE report
+    SET SubmittingDivisionId = COALESCE((
+        SELECT TOP (1) assignment.DivisionId
+        FROM tracker.ResponsibilityAssignments AS assignment
+        INNER JOIN tracker.Divisions AS division ON division.Id = assignment.DivisionId
+        INNER JOIN tracker.Users AS officer ON officer.Id = assignment.PrimaryOfficerId
+            AND officer.DivisionId = assignment.DivisionId AND officer.IsActive = 1
+        WHERE assignment.ReportDefinitionId = report.Id AND assignment.ResponsibilityType = N'MainSender'
+            AND assignment.EffectiveFromUtc <= GETUTCDATE()
+            AND (assignment.EffectiveToUtc IS NULL OR assignment.EffectiveToUtc > GETUTCDATE())
+        ORDER BY assignment.EffectiveFromUtc DESC, assignment.Id
+    ), report.OwnerDivisionId)
+    FROM tracker.ReportDefinitions AS report;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110192740_SeparateCoordinatingAndSubmittingDivisions'
+)
+BEGIN
+    CREATE INDEX [IX_ReportDefinitions_SubmittingDivisionId] ON [tracker].[ReportDefinitions] ([SubmittingDivisionId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110192740_SeparateCoordinatingAndSubmittingDivisions'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReportDefinitions] ADD CONSTRAINT [FK_ReportDefinitions_Divisions_SubmittingDivisionId] FOREIGN KEY ([SubmittingDivisionId]) REFERENCES [tracker].[Divisions] ([Id]) ON DELETE NO ACTION;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110192740_SeparateCoordinatingAndSubmittingDivisions'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261110192740_SeparateCoordinatingAndSubmittingDivisions', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110202339_ReportReceivingDivision'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReportDefinitions] ADD [ReceivingDivisionId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110202339_ReportReceivingDivision'
+)
+BEGIN
+    CREATE INDEX [IX_ReportDefinitions_ReceivingDivisionId] ON [tracker].[ReportDefinitions] ([ReceivingDivisionId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110202339_ReportReceivingDivision'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReportDefinitions] ADD CONSTRAINT [FK_ReportDefinitions_Divisions_ReceivingDivisionId] FOREIGN KEY ([ReceivingDivisionId]) REFERENCES [tracker].[Divisions] ([Id]) ON DELETE NO ACTION;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110202339_ReportReceivingDivision'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261110202339_ReportReceivingDivision', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110202916_ComponentMandatorySnapshot'
+)
+BEGIN
+    ALTER TABLE [tracker].[TrackingObligations] ADD [IsRequired] bit NOT NULL DEFAULT CAST(1 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261110202916_ComponentMandatorySnapshot'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261110202916_ComponentMandatorySnapshot', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReportDefinitions] ADD [SubmissionRecipientId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    CREATE TABLE [tracker].[SubmissionRecipients] (
+        [Id] uniqueidentifier NOT NULL,
+        [Name] nvarchar(250) NOT NULL,
+        [CreatedAtUtc] datetime2 NOT NULL,
+        [UpdatedAtUtc] datetime2 NULL,
+        [RowVersion] rowversion NOT NULL,
+        CONSTRAINT [PK_SubmissionRecipients] PRIMARY KEY ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    CREATE TABLE [tracker].[SubmissionRecipientDepartments] (
+        [Id] uniqueidentifier NOT NULL,
+        [SubmissionRecipientId] uniqueidentifier NOT NULL,
+        [Name] nvarchar(150) NOT NULL,
+        [CreatedAtUtc] datetime2 NOT NULL,
+        [UpdatedAtUtc] datetime2 NULL,
+        [RowVersion] rowversion NOT NULL,
+        CONSTRAINT [PK_SubmissionRecipientDepartments] PRIMARY KEY ([Id]),
+        CONSTRAINT [FK_SubmissionRecipientDepartments_SubmissionRecipients_SubmissionRecipientId] FOREIGN KEY ([SubmissionRecipientId]) REFERENCES [tracker].[SubmissionRecipients] ([Id]) ON DELETE NO ACTION
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    CREATE TABLE [tracker].[ReportSubmissionDepartments] (
+        [ReportDefinitionId] uniqueidentifier NOT NULL,
+        [DepartmentId] uniqueidentifier NOT NULL,
+        CONSTRAINT [PK_ReportSubmissionDepartments] PRIMARY KEY ([ReportDefinitionId], [DepartmentId]),
+        CONSTRAINT [FK_ReportSubmissionDepartments_ReportDefinitions_ReportDefinitionId] FOREIGN KEY ([ReportDefinitionId]) REFERENCES [tracker].[ReportDefinitions] ([Id]) ON DELETE CASCADE,
+        CONSTRAINT [FK_ReportSubmissionDepartments_SubmissionRecipientDepartments_DepartmentId] FOREIGN KEY ([DepartmentId]) REFERENCES [tracker].[SubmissionRecipientDepartments] ([Id]) ON DELETE NO ACTION
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    CREATE INDEX [IX_ReportDefinitions_SubmissionRecipientId] ON [tracker].[ReportDefinitions] ([SubmissionRecipientId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    CREATE INDEX [IX_ReportSubmissionDepartments_DepartmentId] ON [tracker].[ReportSubmissionDepartments] ([DepartmentId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_SubmissionRecipientDepartments_SubmissionRecipientId_Name] ON [tracker].[SubmissionRecipientDepartments] ([SubmissionRecipientId], [Name]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_SubmissionRecipients_Name] ON [tracker].[SubmissionRecipients] ([Name]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    ALTER TABLE [tracker].[ReportDefinitions] ADD CONSTRAINT [FK_ReportDefinitions_SubmissionRecipients_SubmissionRecipientId] FOREIGN KEY ([SubmissionRecipientId]) REFERENCES [tracker].[SubmissionRecipients] ([Id]) ON DELETE NO ACTION;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    INSERT INTO [tracker].[SubmissionRecipients] ([Id], [Name], [CreatedAtUtc])
+    SELECT NEWID(), [Name], SYSUTCDATETIME()
+    FROM (
+        SELECT DISTINCT CONVERT(nvarchar(250), LTRIM(RTRIM([BbRecipient]))) AS [Name]
+        FROM [tracker].[ReportDefinitions]
+        WHERE DATALENGTH(LTRIM(RTRIM([BbRecipient]))) BETWEEN 2 AND 500
+    ) AS [LegacyRecipients];
+
+    EXEC(N'
+        UPDATE report
+        SET [SubmissionRecipientId] = recipient.[Id]
+        FROM [tracker].[ReportDefinitions] AS report
+        JOIN [tracker].[SubmissionRecipients] AS recipient
+          ON LTRIM(RTRIM(report.[BbRecipient])) = recipient.[Name]
+        WHERE report.[SubmissionRecipientId] IS NULL;
+    ');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111173026_SubmissionRecipientDirectory'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261111173026_SubmissionRecipientDirectory', N'10.0.10');
+END;
+
+COMMIT;
+GO
+

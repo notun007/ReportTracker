@@ -3,7 +3,12 @@ using System.ComponentModel.DataAnnotations;
 namespace ReportTracker.Application.Contracts;
 
 public sealed record EvidenceItem(Guid Id, Guid TrackingObligationId, string OriginalFileName, string ContentType,
-    long SizeBytes, string Sha256, string Status, string Purpose, DateTime UploadedAtUtc, string UploadedBy);
+    long SizeBytes, string Sha256, string Status, string Purpose, DateTime UploadedAtUtc, string UploadedBy,
+    Guid UploadedByUserId = default, bool CanReview = false);
+public sealed record ObligationActions(bool CanUploadEvidence, bool CanConfirmReceipt, bool CanReviewEvidence, bool CanAmendStatus,
+    bool IsExternalReceipt, bool HasSending, Guid? ReceivingDivisionId, string? ReceivingDivisionName, bool CanAssignReceiver,
+    IReadOnlyList<LookupItem> ReceivingDivisions);
+public sealed record AssignReceivingDivisionRequest(Guid ReceivingDivisionId);
 public sealed record EvidenceDecisionRequest([Required] string Decision, [StringLength(1000)] string? Reason);
 
 public sealed record ReceiptRequest(DateTime ReceivedAtUtc, bool IsDisputed, [StringLength(1000)] string? Reason);

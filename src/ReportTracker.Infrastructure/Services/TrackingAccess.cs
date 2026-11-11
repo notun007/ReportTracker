@@ -29,9 +29,27 @@ public sealed class TrackingAccess(ReportTrackerDbContext db, ICurrentUser curre
     public IQueryable<TrackingObligation> AuthorizedObligations(bool writing = false)
     {
         var grants = Grants(writing ? "tracking.record" : "tracking.read");
+        var reviewers = Grants("reports.manage");
+        var receivingDivisions = db.Users.Where(x => x.Id == UserId && x.IsActive).Select(x => x.DivisionId);
         return db.TrackingObligations.Where(x => x.PrimaryOfficerId == UserId || x.DeputyOfficerId == UserId ||
             grants.Any(g => (!g.DivisionId.HasValue || g.DivisionId == x.AccountableDivisionId) &&
-                            (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId)));
+                            (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId)) ||
+            (!writing && ((x.ReceivingDivisionId.HasValue && receivingDivisions.Contains(x.ReceivingDivisionId.Value)) ||
+                reviewers.Any(g => (!g.DivisionId.HasValue || g.DivisionId == x.ReportCycle.ReportDefinition.OwnerDivisionId) &&
+                    (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId)))));
+    }
+
+    public IQueryable<TrackingObligation> AuthorizedReceiptObligations()
+    {
+        var receivingDivisions = db.Users.Where(x => x.Id == UserId && x.IsActive).Select(x => x.DivisionId);
+        var coordinators = Grants("reports.manage");
+        return db.TrackingObligations.Where(x => x.PrimaryOfficerId != UserId && x.DeputyOfficerId != UserId &&
+            !x.SendingEvents.Any(s => !s.IsReversed && s.ActingUserId == UserId) &&
+            ((x.Type == ReportTracker.Domain.Enums.ObligationType.Internal && x.ReceivingDivisionId.HasValue &&
+                receivingDivisions.Contains(x.ReceivingDivisionId.Value)) ||
+             (x.Type == ReportTracker.Domain.Enums.ObligationType.External && coordinators.Any(g =>
+                (!g.DivisionId.HasValue || g.DivisionId == x.ReportCycle.ReportDefinition.OwnerDivisionId) &&
+                (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId)))));
     }
 
     public async Task RequireAsync(string permission, Guid? divisionId, Guid? reportId, CancellationToken ct)

@@ -32,7 +32,7 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
         var divisions = await db.Divisions.AsNoTracking().Where(x => rows.Select(r => r.AccountableDivisionId).Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, x => x.Name, ct);
         var readiness = ReadinessByMainObligation(rows);
-        var readyForSubmission = readiness.Values.Count(x => x.Required > 0 && x.Completed == x.Required);
+        var readyForSubmission = readiness.Values.Count(x => x.Total > 0 && x.Completed == x.Required);
         var upcoming = rows.Select(x => ToDto(x, owners.GetValueOrDefault(x.PrimaryOfficerId ?? Guid.Empty, "Unassigned"), writable.Contains(x.Id), now, access.UserId,
             readiness.GetValueOrDefault(x.Id), divisions.GetValueOrDefault(x.AccountableDivisionId, "Unknown division"))).ToList();
         var performance = Enum.GetValues<SendingStatus>().Select(status => new StatusCountDto(Label(status), rows.Count(x => x.SendingStatus == status))).ToList();
@@ -101,29 +101,29 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
     }
 
     private static ObligationListItemDto ToDto(TrackingObligation row, string owner, bool writable, DateTime now, Guid userId,
-        (int Required, int Completed)? readiness, string division)
+        (int Required, int Completed, int Total)? readiness, string division)
     {
         var actual = row.SendingStatus == SendingStatus.Sent
             ? row.SendingEvents.Where(x => !x.IsReversed && !x.IsPartial).Select(x => (DateTime?)x.ActualSentAtUtc).Max() : null;
-        return new(row.Id, row.ReportCycleId, row.ReportCycle.ReportDefinition.Name, row.ReportCycle.PeriodLabel, row.Name,
+        return new(row.Id, row.ReportCycleId, row.ReportCycle.ReportDefinition.Name, row.ReportCycle.PeriodLabel, TrackingRules.ObligationDisplayName(row.Type, row.Name),
             row.Type switch { ObligationType.Internal => "Internal", ObligationType.External => "BB", _ => "Correction" },
             owner, DateTime.SpecifyKind(row.EffectiveDueAtUtc, DateTimeKind.Utc), TrackingRules.Timeliness(row.EffectiveDueAtUtc, actual, now),
             Label(row.SendingStatus), Label(row.ReceiptStatus), Label(row.EvidenceStatus), row.Recipient,
             Convert.ToBase64String(row.RowVersion), writable && row.SendingStatus != SendingStatus.Sent && row.ExceptionStatus == ExceptionStatus.None,
             row.PrimaryOfficerId == userId || row.DeputyOfficerId == userId,
             readiness?.Required ?? 0, readiness?.Completed ?? 0,
-            readiness is { Required: > 0 } value && value.Required == value.Completed,
+            readiness is { Total: > 0 } value && value.Required == value.Completed,
             row.AccountableDivisionId, division);
     }
 
-    private static Dictionary<Guid, (int Required, int Completed)> ReadinessByMainObligation(IEnumerable<TrackingObligation> obligations)
+    private static Dictionary<Guid, (int Required, int Completed, int Total)> ReadinessByMainObligation(IEnumerable<TrackingObligation> obligations)
     {
         return obligations.Where(x => x.Type == ObligationType.External).ToDictionary(
             main => main.Id,
             main =>
             {
                 var components = obligations.Where(x => x.ParentObligationId == main.Id && x.ExceptionStatus == ExceptionStatus.None).ToList();
-                return (components.Count, components.Count(IsComplete));
+                return (components.Count(x => x.IsRequired), components.Count(x => x.IsRequired && IsComplete(x)), components.Count);
             });
     }
 
