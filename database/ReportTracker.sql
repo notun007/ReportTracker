@@ -1311,3 +1311,32 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111183238_ComponentContributorAssignments'
+)
+BEGIN
+    ALTER TABLE [tracker].[TrackingObligations] ADD [ContributorsJson] nvarchar(max) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111183238_ComponentContributorAssignments'
+)
+BEGIN
+    ALTER TABLE [tracker].[ComponentDefinitions] ADD [ContributorsJson] nvarchar(max) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261111183238_ComponentContributorAssignments'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261111183238_ComponentContributorAssignments', N'10.0.10');
+END;
+
+COMMIT;
+GO
+

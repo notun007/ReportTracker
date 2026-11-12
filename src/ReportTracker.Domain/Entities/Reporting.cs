@@ -77,6 +77,7 @@ public sealed class ComponentDefinition : Entity
     public bool ReceiptConfirmationRequired { get; set; }
     public bool EvidenceRequired { get; set; }
     public string? DeadlineRuleJson { get; set; }
+    public string? ContributorsJson { get; set; }
 }
 
 public sealed class ReportCycle : Entity
@@ -93,6 +94,7 @@ public sealed class ReportCycle : Entity
 
 public sealed class TrackingObligation : Entity
 {
+    public string? ContributorsJson { get; set; }
     public bool IsRequired { get; set; } = true;
     public Guid ReportCycleId { get; set; }
     public ReportCycle ReportCycle { get; set; } = null!;

@@ -240,6 +240,9 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("ContributorsJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -1478,6 +1481,9 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("AccountableDivisionId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ContributorsJson")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<Guid?>("CorrectionCaseId")
                         .HasColumnType("uniqueidentifier");

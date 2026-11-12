@@ -28,7 +28,10 @@ public sealed record CreateReportRequest(
 public sealed record ReportComponentRequest(
     [Required, StringLength(250)] string Name, [StringLength(1000)] string? Description,
     bool IsRequired, [Range(0, 10000)] int Sequence, Guid ProviderDivisionId, Guid PrimaryOfficerId, Guid? DeputyOfficerId,
-    bool ReceiptRequired, bool EvidenceRequired, [Range(0, 365)] int DeadlineOffsetDays = 1);
+    bool ReceiptRequired, bool EvidenceRequired, [Range(0, 365)] int DeadlineOffsetDays = 1,
+    [MaxLength(200)] IReadOnlyList<ComponentContributorItem>? Contributors = null);
+public sealed record ComponentContributorItem(Guid UserId, string Role, bool RecordsHandover = false);
+public sealed record SetComponentContributorsRequest([Required, MaxLength(200)] IReadOnlyList<ComponentContributorItem> Contributors);
 public sealed record ReportItem(Guid Id, string Code, string Name, Guid OwnerDivisionId, string BbRecipient, string Frequency, int CycleCount,
     Guid? SubmittingDivisionId = null, Guid? PrimarySubmittingOfficerId = null, Guid? DeputySubmittingOfficerId = null, Guid? ReceivingDivisionId = null,
     Guid? SubmissionRecipientId = null, IReadOnlyList<Guid>? SubmissionDepartmentIds = null, string? SubmissionDestination = null);
@@ -46,7 +49,8 @@ public sealed record ReportingCycleItem(Guid Id, string PeriodKey, string Period
     IReadOnlyList<CycleObligationItem> Obligations);
 public sealed record CycleObligationItem(string Name, string Type, Guid DivisionId, string DivisionName,
     Guid? PrimaryOfficerId, string? PrimaryOfficerName, Guid? DeputyOfficerId, string? DeputyOfficerName,
-    string Recipient, DateTime DueAtUtc, bool ReceiptRequired, bool EvidenceRequired, Guid? ReceivingDivisionId = null);
+    string Recipient, DateTime DueAtUtc, bool ReceiptRequired, bool EvidenceRequired, Guid? ReceivingDivisionId = null,
+    IReadOnlyList<ComponentContributorItem>? Contributors = null);
 public sealed record CreateObligationRequest(
     [Required, StringLength(250)] string Name, string Type, Guid DivisionId, Guid PrimaryOfficerId,
     Guid? DeputyOfficerId, [Required, StringLength(4000)] string Recipient, DateTime DueAtUtc,
@@ -55,7 +59,7 @@ public sealed record CreateObligationRequest(
 public sealed record ComponentItem(
     Guid Id, Guid DefinitionVersionId, string Name, string? Description, bool IsRequired, int Sequence,
     Guid ProviderDivisionId, Guid? PrimaryOfficerId, Guid? DeputyOfficerId, Guid ReceivingDivisionId,
-    bool ReceiptRequired, bool EvidenceRequired, int DeadlineOffsetDays);
+    bool ReceiptRequired, bool EvidenceRequired, int DeadlineOffsetDays, IReadOnlyList<ComponentContributorItem>? Contributors = null);
 
 public sealed record SaveComponentRequest(
     [Required, StringLength(250)] string Name,
@@ -68,4 +72,4 @@ public sealed record SaveComponentRequest(
     Guid ReceivingDivisionId,
     bool ReceiptRequired,
     bool EvidenceRequired,
-    [Range(0, 365)] int DeadlineOffsetDays = 1);
+    [Range(0, 365)] int DeadlineOffsetDays = 1, [MaxLength(200)] IReadOnlyList<ComponentContributorItem>? Contributors = null);

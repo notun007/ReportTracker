@@ -68,11 +68,17 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         if (request.ComponentDeadlineOffsetDays is < 0 or > 365) throw new TrackingValidationException("Deadline lead days must be between 0 and 365 days.");
         if (!request.ReceivingDivisionId.HasValue || !await db.Divisions.AnyAsync(x => x.Id == request.ReceivingDivisionId && x.IsActive, ct))
             throw new TrackingValidationException("Choose an active receiving division for the report's components.");
-        var components = request.Components ?? [];
+        var components = (request.Components ?? []).ToList();
         if (components.Count > 100) throw new TrackingValidationException("A report can contain at most 100 components.");
-        foreach (var component in components)
+        for (var i = 0; i < components.Count; i++)
         {
+            var component = components[i];
             if (component is null) throw new TrackingValidationException("Every component must contain its configuration.");
+            if (component.Contributors is not null)
+            {
+                var (primary, deputy) = await ComponentValidation.ValidateContributorsAsync(db, component.ProviderDivisionId, component.Contributors, ct);
+                components[i] = component = component with { PrimaryOfficerId = primary!.Value, DeputyOfficerId = deputy };
+            }
             await ComponentValidation.ValidateAsync(db, component.Name, component.Description, component.Sequence, component.ProviderDivisionId,
                 request.ReceivingDivisionId.Value, component.PrimaryOfficerId, component.DeputyOfficerId, request.ComponentDeadlineOffsetDays, ct);
         }
@@ -95,6 +101,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
             var component = new ComponentDefinition { DefinitionVersionId = version.Id, Name = item.Name.Trim(), Description = item.Description?.Trim(),
                 IsRequired = item.IsRequired, Sequence = item.Sequence, ProviderDivisionId = item.ProviderDivisionId,
                 PrimaryOfficerId = item.PrimaryOfficerId, DeputyOfficerId = item.DeputyOfficerId, ReceivingDivisionId = request.ReceivingDivisionId.Value,
+                ContributorsJson = JsonSerializer.Serialize(item.Contributors ?? ComponentValidation.Contributors(null, item.PrimaryOfficerId, item.DeputyOfficerId)),
                 ReceiptConfirmationRequired = item.ReceiptRequired, EvidenceRequired = item.EvidenceRequired,
                 DeadlineRuleJson = JsonSerializer.Serialize(new { offsetDays = request.ComponentDeadlineOffsetDays }) };
             db.ComponentDefinitions.Add(component);
@@ -198,7 +205,8 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
                     x.AccountableDivisionId, divisions.GetValueOrDefault(x.AccountableDivisionId, "Unknown division"),
                     x.PrimaryOfficerId, officers.GetValueOrDefault(x.PrimaryOfficerId ?? Guid.Empty),
                     x.DeputyOfficerId, officers.GetValueOrDefault(x.DeputyOfficerId ?? Guid.Empty), x.Recipient,
-                    x.EffectiveDueAtUtc, x.ReceiptStatus != ReceiptStatus.NotRequired, x.EvidenceStatus != EvidenceStatus.NotRequired, x.ReceivingDivisionId)).ToList())).ToList());
+                    x.EffectiveDueAtUtc, x.ReceiptStatus != ReceiptStatus.NotRequired, x.EvidenceStatus != EvidenceStatus.NotRequired, x.ReceivingDivisionId,
+                    x.Type == ObligationType.Internal ? ComponentValidation.Contributors(x.ContributorsJson, x.PrimaryOfficerId, x.DeputyOfficerId) : null)).ToList())).ToList());
     }
 
     [HttpPost("reports/{reportId:guid}/cycles")]

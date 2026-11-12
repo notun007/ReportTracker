@@ -74,6 +74,7 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                     cycle.Obligations.Add(new TrackingObligation { ReportCycleId = cycle.Id, ParentObligationId = main.Id, Type = ObligationType.Internal,
                         Name = component.Name, IsRequired = component.IsRequired, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
                         DeputyOfficerId = component.DeputyOfficerId, ReceivingDivisionId = report.ReceivingDivisionId ?? component.ReceivingDivisionId,
+                        ContributorsJson = component.ContributorsJson ?? JsonSerializer.Serialize(ComponentValidation.Contributors(null, component.PrimaryOfficerId, component.DeputyOfficerId)),
                         Recipient = (report.ReceivingDivisionId ?? component.ReceivingDivisionId).ToString(), OriginalDueAtUtc = dueUtc,
                         EffectiveDueAtUtc = dueUtc, ReceiptStatus = component.ReceiptConfirmationRequired ? ReceiptStatus.AwaitingConfirmation : ReceiptStatus.NotRequired,
                         EvidenceStatus = component.EvidenceRequired ? EvidenceStatus.Missing : EvidenceStatus.NotRequired } );

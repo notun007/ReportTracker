@@ -37,6 +37,11 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
         var version = await db.DefinitionVersions.Where(x => x.ReportDefinitionId == reportId)
             .OrderByDescending(x => x.VersionNumber).FirstAsync(ct);
         request = request with { DeadlineOffsetDays = version.ComponentDeadlineOffsetDays };
+        if (request.Contributors is not null)
+        {
+            var (primary, deputy) = await ComponentValidation.ValidateContributorsAsync(db, request.ProviderDivisionId, request.Contributors, ct);
+            request = request with { PrimaryOfficerId = primary, DeputyOfficerId = deputy };
+        }
         await ValidateAssignment(request, ct);
         var component = new ComponentDefinition
         {
@@ -48,6 +53,8 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
             ProviderDivisionId = request.ProviderDivisionId,
             PrimaryOfficerId = request.PrimaryOfficerId,
             DeputyOfficerId = request.DeputyOfficerId,
+            ContributorsJson = JsonSerializer.Serialize(request.Contributors ??
+                ComponentValidation.Contributors(null, request.PrimaryOfficerId, request.DeputyOfficerId)),
             ReceivingDivisionId = request.ReceivingDivisionId,
             ReceiptConfirmationRequired = request.ReceiptRequired,
             EvidenceRequired = request.EvidenceRequired,
@@ -61,6 +68,30 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
         });
         await db.SaveChangesAsync(ct);
         return Created($"/api/report-definitions/{reportId}/components/{component.Id}", ToItem(component));
+    }
+
+    [HttpPut("{componentId:guid}/contributors")]
+    public async Task<ActionResult<ComponentItem>> SetContributors(Guid reportId, Guid componentId, SetComponentContributorsRequest request, CancellationToken ct)
+    {
+        var report = await db.ReportDefinitions.AsNoTracking().FirstOrDefaultAsync(x => x.Id == reportId && x.IsActive, ct);
+        if (report is null) return NotFound();
+        await access.RequireAsync("reports.manage", report.OwnerDivisionId, reportId, ct);
+        var versionId = await db.DefinitionVersions.Where(x => x.ReportDefinitionId == reportId)
+            .OrderByDescending(x => x.VersionNumber).Select(x => x.Id).FirstAsync(ct);
+        var component = await db.ComponentDefinitions.SingleOrDefaultAsync(x => x.Id == componentId && x.DefinitionVersionId == versionId, ct);
+        if (component is null) return NotFound();
+        var (primary, deputy) = await ComponentValidation.ValidateContributorsAsync(db, component.ProviderDivisionId, request.Contributors, ct);
+        var previous = ComponentValidation.Contributors(component.ContributorsJson, component.PrimaryOfficerId, component.DeputyOfficerId);
+        component.PrimaryOfficerId = primary;
+        component.DeputyOfficerId = deputy;
+        component.ContributorsJson = JsonSerializer.Serialize(request.Contributors);
+        db.AuditEvents.Add(new AuditEvent
+        {
+            EntityType = nameof(ComponentDefinition), EntityId = component.Id, ActorUserId = access.UserId,
+            Action = "ComponentContributorsChanged", DataJson = JsonSerializer.Serialize(new { reportId, previous, request.Contributors })
+        });
+        await db.SaveChangesAsync(ct);
+        return Ok(ToItem(component));
     }
 
     private async Task ValidateAssignment(SaveComponentRequest request, CancellationToken ct)
@@ -79,7 +110,8 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
         }
         return new(row.Id, row.DefinitionVersionId, row.Name, row.Description, row.IsRequired, row.Sequence,
             row.ProviderDivisionId, row.PrimaryOfficerId, row.DeputyOfficerId, row.ReceivingDivisionId,
-            row.ReceiptConfirmationRequired, row.EvidenceRequired, offset);
+            row.ReceiptConfirmationRequired, row.EvidenceRequired, offset,
+            ComponentValidation.Contributors(row.ContributorsJson, row.PrimaryOfficerId, row.DeputyOfficerId));
     }
 }
 
