@@ -11,6 +11,7 @@ public sealed record SetupRequest(
 public sealed record SessionUser(Guid Id, string DisplayName, string Email, Guid DivisionId, IReadOnlyList<string> Permissions);
 public sealed record SessionResponse(bool SetupRequired, SessionUser? User);
 public sealed record LookupItem(Guid Id, string Name);
+public sealed record DivisionItem(Guid Id, string Code, string Name, bool IsActive);
 public sealed record UserItem(Guid Id, string EmployeeId, string DisplayName, string Email, string? MobileNumber, Guid DivisionId, bool IsActive, IReadOnlyList<string> Roles);
 public sealed record CreateUserRequest(
     [Required, StringLength(40)] string EmployeeId, [Required, StringLength(150)] string DisplayName,

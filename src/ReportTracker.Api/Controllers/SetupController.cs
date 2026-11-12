@@ -283,8 +283,15 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     {
         await access.RequireAsync("administration.manage", null, null, ct);
         if (!await db.Divisions.AnyAsync(x => x.Id == request.DivisionId && x.IsActive, ct)) throw new TrackingValidationException("Choose an active division.");
-        var user = new AppUser { EmployeeId = request.EmployeeId.Trim(), DisplayName = request.DisplayName.Trim(),
-            Email = request.Email.Trim().ToLowerInvariant(), MobileNumber = request.MobileNumber?.Trim(), DivisionId = request.DivisionId };
+        var employeeId = request.EmployeeId.Trim();
+        var normalizedEmployeeId = employeeId.ToUpperInvariant();
+        var email = request.Email.Trim().ToLowerInvariant();
+        if (await db.Users.AnyAsync(x => x.EmployeeId.ToUpper() == normalizedEmployeeId, ct))
+            return DuplicateUser("employeeId", "An account with this employee ID already exists.");
+        if (await db.Users.AnyAsync(x => x.Email.ToLower() == email, ct))
+            return DuplicateUser("email", "An account with this email address already exists.");
+        var user = new AppUser { EmployeeId = employeeId, DisplayName = request.DisplayName.Trim(),
+            Email = email, MobileNumber = request.MobileNumber?.Trim(), DivisionId = request.DivisionId };
         db.Users.Add(user);
         db.LocalCredentials.Add(new LocalCredential { UserId = user.Id, PasswordHash = hasher.HashPassword(user, request.Password) });
         if (request.IsCoordinator)
@@ -324,6 +331,14 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         return NoContent();
     }
 
+    [HttpGet("divisions")]
+    public async Task<ActionResult<IReadOnlyList<DivisionItem>>> Divisions(CancellationToken ct)
+    {
+        await access.RequireAsync("administration.manage", null, null, ct);
+        return Ok(await db.Divisions.AsNoTracking().OrderBy(x => x.Name)
+            .Select(x => new DivisionItem(x.Id, x.Code, x.Name, x.IsActive)).ToListAsync(ct));
+    }
+
     [HttpPost("divisions")]
     public async Task<IActionResult> CreateDivision(CreateDivisionRequest request, CancellationToken ct)
     {
@@ -349,4 +364,12 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
 
     private void Audit(string type, Guid id, string action, object data) => db.AuditEvents.Add(new AuditEvent
     { EntityType = type, EntityId = id, Action = action, ActorUserId = access.UserId, DataJson = JsonSerializer.Serialize(data) });
+
+    private ConflictObjectResult DuplicateUser(string field, string detail) => Conflict(new ProblemDetails
+    {
+        Status = StatusCodes.Status409Conflict,
+        Title = "User already exists.",
+        Detail = detail,
+        Extensions = { ["field"] = field }
+    });
 }

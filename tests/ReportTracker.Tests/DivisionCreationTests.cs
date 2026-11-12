@@ -50,6 +50,39 @@ public sealed class DivisionCreationTests
         Assert.Equal(actor, audit.ActorUserId);
     }
 
+    [Fact]
+    public async Task Division_directory_includes_inactive_codes_for_duplicate_checks()
+    {
+        await using var db = CreateDb();
+        var actor = await SeedAdministrator(db);
+        db.Divisions.Add(new Division { Code = "OLD", Name = "Archived division", IsActive = false });
+        await db.SaveChangesAsync();
+
+        var result = await Controller(db, actor).Divisions(default);
+        var rows = Assert.IsAssignableFrom<IReadOnlyList<DivisionItem>>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.False(Assert.Single(rows, row => row.Code == "OLD").IsActive);
+        Assert.True(Assert.Single(rows, row => row.Code == "1001").IsActive);
+    }
+
+    [Theory]
+    [InlineData(" admin ", "new@example.test", "employeeId")]
+    [InlineData("NEW", "ADMIN@EXAMPLE.TEST", "email")]
+    public async Task Duplicate_user_identifier_returns_field_conflict_before_writing(string employeeId, string email, string field)
+    {
+        await using var db = CreateDb();
+        var actor = await SeedAdministrator(db);
+        var divisionId = await db.Divisions.Select(division => division.Id).SingleAsync();
+
+        var result = await Controller(db, actor).CreateUser(
+            new CreateUserRequest(employeeId, "Another user", email, null, divisionId, "TestPassword123!", false), default);
+
+        var problem = Assert.IsType<ProblemDetails>(Assert.IsType<ConflictObjectResult>(result).Value);
+        Assert.Equal(field, problem.Extensions["field"]);
+        Assert.Single(await db.Users.ToListAsync());
+        Assert.Empty(await db.LocalCredentials.ToListAsync());
+        Assert.Empty(await db.AuditEvents.ToListAsync());
+    }
+
     private static ReportTrackerDbContext CreateDb() => new(new DbContextOptionsBuilder<ReportTrackerDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
