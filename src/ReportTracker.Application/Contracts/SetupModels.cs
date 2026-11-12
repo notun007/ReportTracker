@@ -34,7 +34,9 @@ public sealed record ComponentContributorItem(Guid UserId, string Role, bool Rec
 public sealed record SetComponentContributorsRequest([Required, MaxLength(200)] IReadOnlyList<ComponentContributorItem> Contributors);
 public sealed record ReportItem(Guid Id, string Code, string Name, Guid OwnerDivisionId, string BbRecipient, string Frequency, int CycleCount,
     Guid? SubmittingDivisionId = null, Guid? PrimarySubmittingOfficerId = null, Guid? DeputySubmittingOfficerId = null, Guid? ReceivingDivisionId = null,
-    Guid? SubmissionRecipientId = null, IReadOnlyList<Guid>? SubmissionDepartmentIds = null, string? SubmissionDestination = null);
+    Guid? SubmissionRecipientId = null, IReadOnlyList<Guid>? SubmissionDepartmentIds = null, string? SubmissionDestination = null,
+    TimeOnly? DueTime = null, int? ComponentDeadlineOffsetDays = null, string? TimeZoneId = null,
+    string? InstructionReference = null, string? Description = null);
 public sealed record SubmissionRecipientItem(Guid Id, string Name, IReadOnlyList<LookupItem> Departments);
 public sealed record CreateSubmissionRecipientRequest([Required, StringLength(250)] string Name);
 public sealed record CreateSubmissionDepartmentRequest([Required, StringLength(150)] string Name);

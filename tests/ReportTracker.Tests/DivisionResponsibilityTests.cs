@@ -163,7 +163,8 @@ public sealed class DivisionResponsibilityTests
         (await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id)).ReportDefinitionId = null;
         await db.SaveChangesAsync();
         var controller = Controller(db, f.Coordinator.Id);
-        var request = new CreateReportRequest("AUDIT", "Audit Report", null, f.C.Id, null, null, "Monthly",
+        var request = new CreateReportRequest("AUDIT", "Audit Report", "Monthly audit summary", f.C.Id, null, "AUDIT-2026", "Monthly",
+            DueTime: new TimeOnly(16, 30), ComponentDeadlineOffsetDays: 0,
             SubmittingDivisionId: f.D.Id, PrimarySubmittingOfficerId: f.Submitter.Id, ReceivingDivisionId: f.C.Id,
             SubmissionRecipientId: recipient.Id, SubmissionDepartmentIds: [first.Id, second.Id]);
         await Assert.ThrowsAsync<TrackingValidationException>(() =>
@@ -177,6 +178,11 @@ public sealed class DivisionResponsibilityTests
         var report = await db.ReportDefinitions.SingleAsync(x => x.Code == "AUDIT");
         var items = Assert.IsAssignableFrom<IEnumerable<ReportItem>>(Assert.IsType<OkObjectResult>(await controller.Reports(default)).Value);
         var item = Assert.Single(items, x => x.Id == report.Id);
+        Assert.Equal(request.DueTime, item.DueTime);
+        Assert.Equal(request.ComponentDeadlineOffsetDays, item.ComponentDeadlineOffsetDays);
+        Assert.Equal("Asia/Dhaka", item.TimeZoneId);
+        Assert.Equal(request.InstructionReference, item.InstructionReference);
+        Assert.Equal(request.Description, item.Description);
         Assert.Equal(recipient.Id, item.SubmissionRecipientId);
         Assert.Equal(new[] { first.Id, second.Id }.Order(), item.SubmissionDepartmentIds!.Order());
         Assert.Equal("External Audit Office — Audit; Supervision", item.SubmissionDestination);

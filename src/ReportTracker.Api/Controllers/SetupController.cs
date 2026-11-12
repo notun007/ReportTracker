@@ -36,10 +36,11 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
             .OrderBy(x => x.Name).Select(x => new
             {
                 x.Id, x.Code, x.Name, x.OwnerDivisionId, x.SubmittingDivisionId, x.ReceivingDivisionId, x.BbRecipient,
-                x.SubmissionRecipientId,
+                x.SubmissionRecipientId, x.InstructionReference, x.Description,
                 RecipientName = x.SubmissionRecipient != null ? x.SubmissionRecipient.Name : x.BbRecipient,
                 Departments = x.SubmissionDepartments.Select(d => new { d.DepartmentId, d.Department.Name }).ToList(),
-                Frequency = x.Versions.OrderByDescending(v => v.VersionNumber).Select(v => v.Frequency).FirstOrDefault(),
+                Version = x.Versions.OrderByDescending(v => v.VersionNumber)
+                    .Select(v => new { v.Frequency, v.DueTime, v.ComponentDeadlineOffsetDays, v.TimeZoneId }).FirstOrDefault(),
                 CycleCount = db.ReportCycles.Count(c => c.ReportDefinitionId == x.Id)
             }).ToListAsync(ct);
         var ids = reports.Select(x => x.Id).ToArray();
@@ -47,10 +48,12 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         var assignments = await db.ResponsibilityAssignments.AsNoTracking().Where(x => ids.Contains(x.ReportDefinitionId) && x.ResponsibilityType == "MainSender" &&
             x.EffectiveFromUtc <= now && (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc > now)).OrderByDescending(x => x.EffectiveFromUtc).ToListAsync(ct);
         return Ok(reports.Select(x => { var sender = assignments.FirstOrDefault(a => a.ReportDefinitionId == x.Id && a.DivisionId == x.SubmittingDivisionId);
-            return new ReportItem(x.Id, x.Code, x.Name, x.OwnerDivisionId, x.BbRecipient, x.Frequency.ToString(), x.CycleCount,
+            return new ReportItem(x.Id, x.Code, x.Name, x.OwnerDivisionId, x.BbRecipient, (x.Version?.Frequency ?? default).ToString(), x.CycleCount,
                 x.SubmittingDivisionId, sender?.PrimaryOfficerId, sender?.DeputyOfficerId, x.ReceivingDivisionId,
                 x.SubmissionRecipientId, x.Departments.Select(d => d.DepartmentId).ToArray(),
-                ReportDefinition.FormatSubmissionDestination(x.RecipientName, x.Departments.Select(d => d.Name))); }));
+                ReportDefinition.FormatSubmissionDestination(x.RecipientName, x.Departments.Select(d => d.Name)),
+                x.Version?.DueTime, x.Version?.ComponentDeadlineOffsetDays, x.Version?.TimeZoneId,
+                x.InstructionReference, x.Description); }));
     }
 
     [HttpPost("reports")]
