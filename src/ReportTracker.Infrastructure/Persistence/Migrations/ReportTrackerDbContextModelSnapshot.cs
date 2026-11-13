@@ -258,12 +258,6 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<bool>("EvidenceRequired")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("IsRequired")
-                        .HasColumnType("bit");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -274,9 +268,6 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("ProviderDivisionId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<bool>("ReceiptConfirmationRequired")
-                        .HasColumnType("bit");
-
                     b.Property<Guid>("ReceivingDivisionId")
                         .HasColumnType("uniqueidentifier");
 
@@ -285,9 +276,6 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
-
-                    b.Property<int>("Sequence")
-                        .HasColumnType("int");
 
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("datetime2");

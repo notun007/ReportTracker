@@ -22,12 +22,12 @@ public sealed class ReportWithComponentsTests
         Assert.Equal(before + 1, counter.Count);
         var report = await db.ReportDefinitions.SingleAsync(); var version = await db.DefinitionVersions.SingleAsync();
         Assert.Equal(f.C.Id, report.ReceivingDivisionId); Assert.Equal(f.C.Id, report.OwnerDivisionId); Assert.Equal(f.D.Id, report.SubmittingDivisionId);
-        var components = await db.ComponentDefinitions.OrderBy(x => x.Sequence).ToListAsync(); Assert.Equal(2, components.Count);
+        var components = await db.ComponentDefinitions.OrderBy(x => x.Name).ToListAsync(); Assert.Equal(2, components.Count);
         Assert.All(components, c => { Assert.Equal(version.Id, c.DefinitionVersionId); Assert.Equal(f.C.Id, c.ReceivingDivisionId); });
         Assert.Equal(f.A.Id, components[0].ProviderDivisionId); Assert.Equal(f.B.Id, components[1].ProviderDivisionId);
         Assert.All(components, c => Assert.Equal(version.ComponentDeadlineOffsetDays,
             JsonDocument.Parse(c.DeadlineRuleJson!).RootElement.GetProperty("offsetDays").GetInt32()));
-        Assert.False(components[1].IsRequired);
+
         Assert.Single(await db.ResponsibilityAssignments.ToListAsync()); Assert.Equal(3, await db.AuditEvents.CountAsync());
     }
 
@@ -61,7 +61,7 @@ public sealed class ReportWithComponentsTests
         await using var db = Db(new Saves()); var f = await Seed(db);
         await Controller(db, f.Actor.Id).CreateReport(Request(f), default); var report = await db.ReportDefinitions.SingleAsync();
         var controller = new ComponentsController(db, new TrackingAccess(db, new Actor(f.Actor.Id)));
-        var request = new SaveComponentRequest("Other", null, true, 3, f.A.Id, f.OfficerA.Id, null, f.D.Id, false, false, 2);
+        var request = new SaveComponentRequest("Other", null, f.A.Id, f.OfficerA.Id, null, f.D.Id, 2);
         await Assert.ThrowsAsync<TrackingValidationException>(() => controller.Create(report.Id, request, default));
         Assert.Equal(2, await db.ComponentDefinitions.CountAsync());
     }
@@ -76,7 +76,7 @@ public sealed class ReportWithComponentsTests
         await Controller(db, f.Actor.Id).CreateReport(Request(f) with { ComponentDeadlineOffsetDays = leadDays }, default);
         var report = await db.ReportDefinitions.SingleAsync();
         var controller = new ComponentsController(db, new TrackingAccess(db, new Actor(f.Actor.Id)));
-        var request = new SaveComponentRequest("New input", null, true, 3, f.A.Id, f.OfficerA.Id, null, f.C.Id, false, false, 2);
+        var request = new SaveComponentRequest("New input", null, f.A.Id, f.OfficerA.Id, null, f.C.Id, 2);
         var result = await controller.Create(report.Id, request, default);
         var created = Assert.IsType<ComponentItem>(Assert.IsType<CreatedResult>(result.Result).Value);
         Assert.Equal(leadDays, created.DeadlineOffsetDays);
@@ -97,8 +97,8 @@ public sealed class ReportWithComponentsTests
     private sealed record Fixture(Division A, Division B, Division C, Division D, AppUser Actor, AppUser OfficerA, AppUser OfficerB, AppUser Submitter);
     private static CreateReportRequest Request(Fixture f) => new("ATM", "Monthly ATM report", null, f.C.Id, "BB", null, "Monthly", new TimeOnly(17, 0), 1,
         f.D.Id, f.Submitter.Id, null, f.C.Id,
-        [new("Component A", "ATM figures", true, 1, f.A.Id, f.OfficerA.Id, null, true, true, 2),
-         new("Component B", null, false, 2, f.B.Id, f.OfficerB.Id, null, false, true, 1)]);
+        [new("Component A", "ATM figures", f.A.Id, f.OfficerA.Id, null, 2),
+         new("Component B", null, f.B.Id, f.OfficerB.Id, null, 1)]);
     private static async Task<Fixture> Seed(ReportTrackerDbContext db)
     {
         Division Division(string code) => new() { Code = code, Name = "Division " + code };

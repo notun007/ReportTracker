@@ -19,19 +19,19 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
                 nullable: true);
 
             migrationBuilder.Sql("""
-                UPDATE report
+                EXEC(N'UPDATE report
                 SET SubmittingDivisionId = COALESCE((
                     SELECT TOP (1) assignment.DivisionId
                     FROM tracker.ResponsibilityAssignments AS assignment
                     INNER JOIN tracker.Divisions AS division ON division.Id = assignment.DivisionId
                     INNER JOIN tracker.Users AS officer ON officer.Id = assignment.PrimaryOfficerId
                         AND officer.DivisionId = assignment.DivisionId AND officer.IsActive = 1
-                    WHERE assignment.ReportDefinitionId = report.Id AND assignment.ResponsibilityType = N'MainSender'
+                    WHERE assignment.ReportDefinitionId = report.Id AND assignment.ResponsibilityType = N''MainSender''
                         AND assignment.EffectiveFromUtc <= GETUTCDATE()
                         AND (assignment.EffectiveToUtc IS NULL OR assignment.EffectiveToUtc > GETUTCDATE())
                     ORDER BY assignment.EffectiveFromUtc DESC, assignment.Id
                 ), report.OwnerDivisionId)
-                FROM tracker.ReportDefinitions AS report;
+                FROM tracker.ReportDefinitions AS report;');
                 """);
 
             migrationBuilder.CreateIndex(

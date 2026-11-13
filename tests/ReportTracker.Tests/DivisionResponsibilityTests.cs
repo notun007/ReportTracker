@@ -18,16 +18,14 @@ namespace ReportTracker.Tests;
 public sealed class DivisionResponsibilityTests
 {
     [Fact]
-    public async Task Optional_component_is_snapshotted_without_blocking_required_component_readiness()
+    public async Task New_components_are_required_and_historical_optional_obligations_do_not_block_readiness()
     {
         using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); var f = await Seed(db);
-        (await db.ComponentDefinitions.SingleAsync(x => x.Name == "Component B")).IsRequired = false;
-        await db.SaveChangesAsync();
         await scope.ServiceProvider.GetRequiredService<ICycleGenerationService>().GenerateAsync(Today(), default);
         var required = await db.TrackingObligations.SingleAsync(x => x.Name == "Component A");
         var optional = await db.TrackingObligations.SingleAsync(x => x.Name == "Component B");
-        Assert.False(optional.IsRequired); required.SendingStatus = SendingStatus.Sent; required.EvidenceStatus = EvidenceStatus.NotRequired; required.ReceiptStatus = ReceiptStatus.NotRequired;
+        Assert.True(optional.IsRequired); Assert.Equal(ReceiptStatus.NotRequired, optional.ReceiptStatus); Assert.Equal(EvidenceStatus.NotRequired, optional.EvidenceStatus); optional.IsRequired = false; required.SendingStatus = SendingStatus.Sent; required.EvidenceStatus = EvidenceStatus.NotRequired; required.ReceiptStatus = ReceiptStatus.NotRequired;
         await db.SaveChangesAsync();
         var response = await new ReadinessController(db, new TrackingAccess(db, new Actor(f.Coordinator.Id))).Get(required.ReportCycleId, default);
         var result = Assert.IsType<SubmissionReadinessDto>(Assert.IsType<OkObjectResult>(response.Result).Value);
@@ -120,7 +118,7 @@ public sealed class DivisionResponsibilityTests
     private static DateOnly Today() => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TrackingRules.Dhaka));
 
     [Fact]
-    public async Task Component_contributors_are_snapshotted_and_only_designated_members_get_handover_access()
+    public async Task Component_contributors_are_snapshotted_and_only_the_lead_gets_handover_access()
     {
         using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); var f = await Seed(db);
@@ -131,21 +129,22 @@ public sealed class DivisionResponsibilityTests
         db.Users.AddRange(reviewer, preparer);
         await db.SaveChangesAsync();
         var controller = new ComponentsController(db, new TrackingAccess(db, new Actor(f.Coordinator.Id)));
-        var contributors = new ComponentContributorItem[] { new(lead, "LeadPreparer", true), new(lead, "Preparer", true),
-            new(preparer.Id, "Preparer", true), new(reviewer.Id, "Reviewer"), new(reviewer.Id, "BackupPreparer") };
+        var contributors = new ComponentContributorItem[] { new(lead, "LeadPreparer"), new(lead, "Preparer"),
+            new(preparer.Id, "Preparer"), new(reviewer.Id, "Reviewer"), new(reviewer.Id, "BackupPreparer") };
         await Assert.ThrowsAsync<TrackingValidationException>(() =>
-            controller.SetContributors(f.Report.Id, component.Id, new([new(lead, "LeadPreparer", true), new(f.Submitter.Id, "Reviewer")]), default));
+            controller.SetContributors(f.Report.Id, component.Id, new([new(lead, "LeadPreparer"), new(f.Submitter.Id, "Reviewer")]), default));
         await Assert.ThrowsAsync<TrackingValidationException>(() =>
-            controller.SetContributors(f.Report.Id, component.Id, new([new(lead, "LeadPreparer", true), new(lead, "Reviewer"), new(lead, "Reviewer")]), default));
+            controller.SetContributors(f.Report.Id, component.Id, new([new(lead, "LeadPreparer"), new(lead, "Reviewer"), new(lead, "Reviewer")]), default));
         var saved = await controller.SetContributors(f.Report.Id, component.Id, new(contributors), default);
         Assert.Equal(contributors, Assert.IsType<ComponentItem>(Assert.IsType<OkObjectResult>(saved.Result).Value).Contributors);
 
         await scope.ServiceProvider.GetRequiredService<ICycleGenerationService>().GenerateAsync(Today(), default);
         var task = await db.TrackingObligations.SingleAsync(x => x.Name == "Component A");
         Assert.Equal(contributors, ComponentValidation.Contributors(task.ContributorsJson, task.PrimaryOfficerId, task.DeputyOfficerId));
-        Assert.True(await new TrackingAccess(db, new Actor(preparer.Id)).AuthorizedObligations(true).AnyAsync(x => x.Id == task.Id));
+        Assert.True(await new TrackingAccess(db, new Actor(lead)).AuthorizedObligations(true).AnyAsync(x => x.Id == task.Id));
+        Assert.False(await new TrackingAccess(db, new Actor(preparer.Id)).AuthorizedObligations(true).AnyAsync(x => x.Id == task.Id));
         Assert.False(await new TrackingAccess(db, new Actor(reviewer.Id)).AuthorizedObligations(true).AnyAsync(x => x.Id == task.Id));
-        await controller.SetContributors(f.Report.Id, component.Id, new([new(lead, "LeadPreparer", true)]), default);
+        await controller.SetContributors(f.Report.Id, component.Id, new([new(lead, "LeadPreparer")]), default);
         Assert.Equal(contributors, ComponentValidation.Contributors(task.ContributorsJson, task.PrimaryOfficerId, task.DeputyOfficerId));
     }
 

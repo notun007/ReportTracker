@@ -82,7 +82,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
                 var (primary, deputy) = await ComponentValidation.ValidateContributorsAsync(db, component.ProviderDivisionId, component.Contributors, ct);
                 components[i] = component = component with { PrimaryOfficerId = primary!.Value, DeputyOfficerId = deputy };
             }
-            await ComponentValidation.ValidateAsync(db, component.Name, component.Description, component.Sequence, component.ProviderDivisionId,
+            await ComponentValidation.ValidateAsync(db, component.Name, component.Description, component.ProviderDivisionId,
                 request.ReceivingDivisionId.Value, component.PrimaryOfficerId, component.DeputyOfficerId, request.ComponentDeadlineOffsetDays, ct);
         }
         if (components.Select(x => x.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != components.Count)
@@ -102,13 +102,12 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         foreach (var item in components)
         {
             var component = new ComponentDefinition { DefinitionVersionId = version.Id, Name = item.Name.Trim(), Description = item.Description?.Trim(),
-                IsRequired = item.IsRequired, Sequence = item.Sequence, ProviderDivisionId = item.ProviderDivisionId,
-                PrimaryOfficerId = item.PrimaryOfficerId, DeputyOfficerId = item.DeputyOfficerId, ReceivingDivisionId = request.ReceivingDivisionId.Value,
+                ProviderDivisionId = item.ProviderDivisionId,
+                PrimaryOfficerId = item.PrimaryOfficerId, ReceivingDivisionId = request.ReceivingDivisionId.Value,
                 ContributorsJson = JsonSerializer.Serialize(item.Contributors ?? ComponentValidation.Contributors(null, item.PrimaryOfficerId, item.DeputyOfficerId)),
-                ReceiptConfirmationRequired = item.ReceiptRequired, EvidenceRequired = item.EvidenceRequired,
                 DeadlineRuleJson = JsonSerializer.Serialize(new { offsetDays = request.ComponentDeadlineOffsetDays }) };
             db.ComponentDefinitions.Add(component);
-            Audit(nameof(ComponentDefinition), component.Id, "ComponentCreated", new { reportId = report.Id, component.Name, component.ProviderDivisionId, component.IsRequired });
+            Audit(nameof(ComponentDefinition), component.Id, "ComponentCreated", new { reportId = report.Id, component.Name, component.ProviderDivisionId });
         }
         db.ResponsibilityAssignments.Add(new ResponsibilityAssignment { ReportDefinitionId = report.Id, DivisionId = request.SubmittingDivisionId!.Value,
             PrimaryOfficerId = request.PrimarySubmittingOfficerId!.Value, DeputyOfficerId = request.DeputySubmittingOfficerId,

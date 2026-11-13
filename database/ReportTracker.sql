@@ -1047,11 +1047,11 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261109191357_ReceivingDivisionResponsibilities'
 )
 BEGIN
-    UPDATE obligation
+    EXEC(N'UPDATE obligation
     SET ReceivingDivisionId = division.Id
     FROM tracker.TrackingObligations AS obligation
     INNER JOIN tracker.Divisions AS division ON division.Id = TRY_CONVERT(uniqueidentifier, obligation.Recipient)
-    WHERE obligation.Type = 1 AND obligation.ReceivingDivisionId IS NULL AND LEN(obligation.Recipient) = 36;
+    WHERE obligation.Type = 1 AND obligation.ReceivingDivisionId IS NULL AND LEN(obligation.Recipient) = 36;');
 END;
 
 IF NOT EXISTS (
@@ -1080,19 +1080,19 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261110192740_SeparateCoordinatingAndSubmittingDivisions'
 )
 BEGIN
-    UPDATE report
+    EXEC(N'UPDATE report
     SET SubmittingDivisionId = COALESCE((
         SELECT TOP (1) assignment.DivisionId
         FROM tracker.ResponsibilityAssignments AS assignment
         INNER JOIN tracker.Divisions AS division ON division.Id = assignment.DivisionId
         INNER JOIN tracker.Users AS officer ON officer.Id = assignment.PrimaryOfficerId
             AND officer.DivisionId = assignment.DivisionId AND officer.IsActive = 1
-        WHERE assignment.ReportDefinitionId = report.Id AND assignment.ResponsibilityType = N'MainSender'
+        WHERE assignment.ReportDefinitionId = report.Id AND assignment.ResponsibilityType = N''MainSender''
             AND assignment.EffectiveFromUtc <= GETUTCDATE()
             AND (assignment.EffectiveToUtc IS NULL OR assignment.EffectiveToUtc > GETUTCDATE())
         ORDER BY assignment.EffectiveFromUtc DESC, assignment.Id
     ), report.OwnerDivisionId)
-    FROM tracker.ReportDefinitions AS report;
+    FROM tracker.ReportDefinitions AS report;');
 END;
 
 IF NOT EXISTS (
@@ -1335,6 +1335,111 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20261111183238_ComponentContributorAssignments', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261113112921_SimplifyComponentDefinitions'
+)
+BEGIN
+    UPDATE component
+    SET [ContributorsJson] = (
+        SELECT assignment.[UserId], assignment.[Role]
+        FROM (VALUES (component.[PrimaryOfficerId], N'LeadPreparer'),
+                     (NULLIF(component.[DeputyOfficerId], component.[PrimaryOfficerId]), N'BackupPreparer')) AS assignment([UserId], [Role])
+        WHERE assignment.[UserId] IS NOT NULL
+        FOR JSON PATH
+    )
+    FROM [tracker].[ComponentDefinitions] AS component
+    WHERE component.[ContributorsJson] IS NULL AND component.[PrimaryOfficerId] IS NOT NULL;
+
+    UPDATE component
+    SET [PrimaryOfficerId] = lead.[UserId],
+        [DeputyOfficerId] = NULL,
+        [ContributorsJson] = (
+            SELECT contributor.[UserId], contributor.[Role]
+            FROM OPENJSON(component.[ContributorsJson])
+            WITH ([UserId] uniqueidentifier '$.UserId', [Role] nvarchar(32) '$.Role') AS contributor
+            FOR JSON PATH
+        )
+    FROM [tracker].[ComponentDefinitions] AS component
+    CROSS APPLY (
+        SELECT TOP (1) contributor.[UserId]
+        FROM OPENJSON(CASE WHEN ISJSON(component.[ContributorsJson]) = 1
+                          THEN component.[ContributorsJson] ELSE N'[]' END)
+        WITH ([UserId] uniqueidentifier '$.UserId', [Role] nvarchar(32) '$.Role') AS contributor
+        WHERE contributor.[Role] = N'LeadPreparer' AND contributor.[UserId] IS NOT NULL
+        ORDER BY contributor.[UserId]
+    ) AS lead;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261113112921_SimplifyComponentDefinitions'
+)
+BEGIN
+    DECLARE @var nvarchar(max);
+    SELECT @var = QUOTENAME([d].[name])
+    FROM [sys].[default_constraints] [d]
+    INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+    WHERE ([d].[parent_object_id] = OBJECT_ID(N'[tracker].[ComponentDefinitions]') AND [c].[name] = N'EvidenceRequired');
+    IF @var IS NOT NULL EXEC(N'ALTER TABLE [tracker].[ComponentDefinitions] DROP CONSTRAINT ' + @var + ';');
+    ALTER TABLE [tracker].[ComponentDefinitions] DROP COLUMN [EvidenceRequired];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261113112921_SimplifyComponentDefinitions'
+)
+BEGIN
+    DECLARE @var1 nvarchar(max);
+    SELECT @var1 = QUOTENAME([d].[name])
+    FROM [sys].[default_constraints] [d]
+    INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+    WHERE ([d].[parent_object_id] = OBJECT_ID(N'[tracker].[ComponentDefinitions]') AND [c].[name] = N'IsRequired');
+    IF @var1 IS NOT NULL EXEC(N'ALTER TABLE [tracker].[ComponentDefinitions] DROP CONSTRAINT ' + @var1 + ';');
+    ALTER TABLE [tracker].[ComponentDefinitions] DROP COLUMN [IsRequired];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261113112921_SimplifyComponentDefinitions'
+)
+BEGIN
+    DECLARE @var2 nvarchar(max);
+    SELECT @var2 = QUOTENAME([d].[name])
+    FROM [sys].[default_constraints] [d]
+    INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+    WHERE ([d].[parent_object_id] = OBJECT_ID(N'[tracker].[ComponentDefinitions]') AND [c].[name] = N'ReceiptConfirmationRequired');
+    IF @var2 IS NOT NULL EXEC(N'ALTER TABLE [tracker].[ComponentDefinitions] DROP CONSTRAINT ' + @var2 + ';');
+    ALTER TABLE [tracker].[ComponentDefinitions] DROP COLUMN [ReceiptConfirmationRequired];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261113112921_SimplifyComponentDefinitions'
+)
+BEGIN
+    DECLARE @var3 nvarchar(max);
+    SELECT @var3 = QUOTENAME([d].[name])
+    FROM [sys].[default_constraints] [d]
+    INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+    WHERE ([d].[parent_object_id] = OBJECT_ID(N'[tracker].[ComponentDefinitions]') AND [c].[name] = N'Sequence');
+    IF @var3 IS NOT NULL EXEC(N'ALTER TABLE [tracker].[ComponentDefinitions] DROP CONSTRAINT ' + @var3 + ';');
+    ALTER TABLE [tracker].[ComponentDefinitions] DROP COLUMN [Sequence];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261113112921_SimplifyComponentDefinitions'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261113112921_SimplifyComponentDefinitions', N'10.0.10');
 END;
 
 COMMIT;

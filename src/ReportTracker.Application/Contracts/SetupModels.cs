@@ -28,10 +28,10 @@ public sealed record CreateReportRequest(
     Guid? SubmissionRecipientId = null, [MaxLength(20)] IReadOnlyList<Guid>? SubmissionDepartmentIds = null);
 public sealed record ReportComponentRequest(
     [Required, StringLength(250)] string Name, [StringLength(1000)] string? Description,
-    bool IsRequired, [Range(0, 10000)] int Sequence, Guid ProviderDivisionId, Guid PrimaryOfficerId, Guid? DeputyOfficerId,
-    bool ReceiptRequired, bool EvidenceRequired, [Range(0, 365)] int DeadlineOffsetDays = 1,
+    Guid ProviderDivisionId, Guid PrimaryOfficerId, Guid? DeputyOfficerId,
+    [Range(0, 365)] int DeadlineOffsetDays = 1,
     [MaxLength(200)] IReadOnlyList<ComponentContributorItem>? Contributors = null);
-public sealed record ComponentContributorItem(Guid UserId, string Role, bool RecordsHandover = false);
+public sealed record ComponentContributorItem(Guid UserId, string Role);
 public sealed record SetComponentContributorsRequest([Required, MaxLength(200)] IReadOnlyList<ComponentContributorItem> Contributors);
 public sealed record ReportItem(Guid Id, string Code, string Name, Guid OwnerDivisionId, string BbRecipient, string Frequency, int CycleCount,
     Guid? SubmittingDivisionId = null, Guid? PrimarySubmittingOfficerId = null, Guid? DeputySubmittingOfficerId = null, Guid? ReceivingDivisionId = null,
@@ -60,19 +60,15 @@ public sealed record CreateObligationRequest(
     bool ReceiptRequired, bool EvidenceRequired, Guid? ReceivingDivisionId = null);
 
 public sealed record ComponentItem(
-    Guid Id, Guid DefinitionVersionId, string Name, string? Description, bool IsRequired, int Sequence,
+    Guid Id, Guid DefinitionVersionId, string Name, string? Description,
     Guid ProviderDivisionId, Guid? PrimaryOfficerId, Guid? DeputyOfficerId, Guid ReceivingDivisionId,
-    bool ReceiptRequired, bool EvidenceRequired, int DeadlineOffsetDays, IReadOnlyList<ComponentContributorItem>? Contributors = null);
+    int DeadlineOffsetDays, IReadOnlyList<ComponentContributorItem>? Contributors = null);
 
 public sealed record SaveComponentRequest(
     [Required, StringLength(250)] string Name,
     [StringLength(1000)] string? Description,
-    bool IsRequired,
-    int Sequence,
     Guid ProviderDivisionId,
     Guid? PrimaryOfficerId,
     Guid? DeputyOfficerId,
     Guid ReceivingDivisionId,
-    bool ReceiptRequired,
-    bool EvidenceRequired,
     [Range(0, 365)] int DeadlineOffsetDays = 1, [MaxLength(200)] IReadOnlyList<ComponentContributorItem>? Contributors = null);

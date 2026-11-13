@@ -22,7 +22,7 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
         var versionId = await db.DefinitionVersions.Where(x => x.ReportDefinitionId == reportId)
             .OrderByDescending(x => x.VersionNumber).Select(x => x.Id).FirstAsync(ct);
         var rows = await db.ComponentDefinitions.AsNoTracking().Where(x => x.DefinitionVersionId == versionId)
-            .OrderBy(x => x.Sequence).ThenBy(x => x.Name).ToListAsync(ct);
+            .OrderBy(x => x.Name).ThenBy(x => x.Id).ToListAsync(ct);
         return Ok(rows.Select(ToItem));
     }
 
@@ -48,23 +48,18 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
             DefinitionVersionId = version.Id,
             Name = request.Name.Trim(),
             Description = request.Description?.Trim(),
-            IsRequired = request.IsRequired,
-            Sequence = request.Sequence,
             ProviderDivisionId = request.ProviderDivisionId,
             PrimaryOfficerId = request.PrimaryOfficerId,
-            DeputyOfficerId = request.DeputyOfficerId,
             ContributorsJson = JsonSerializer.Serialize(request.Contributors ??
                 ComponentValidation.Contributors(null, request.PrimaryOfficerId, request.DeputyOfficerId)),
             ReceivingDivisionId = request.ReceivingDivisionId,
-            ReceiptConfirmationRequired = request.ReceiptRequired,
-            EvidenceRequired = request.EvidenceRequired,
             DeadlineRuleJson = JsonSerializer.Serialize(new { offsetDays = request.DeadlineOffsetDays })
         };
         db.ComponentDefinitions.Add(component);
         db.AuditEvents.Add(new AuditEvent
         {
             EntityType = nameof(ComponentDefinition), EntityId = component.Id, ActorUserId = access.UserId,
-            Action = "ComponentCreated", DataJson = JsonSerializer.Serialize(new { reportId, component.Name, component.ProviderDivisionId, component.IsRequired })
+            Action = "ComponentCreated", DataJson = JsonSerializer.Serialize(new { reportId, component.Name, component.ProviderDivisionId })
         });
         await db.SaveChangesAsync(ct);
         return Created($"/api/report-definitions/{reportId}/components/{component.Id}", ToItem(component));
@@ -96,7 +91,7 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
 
     private async Task ValidateAssignment(SaveComponentRequest request, CancellationToken ct)
     {
-        await ComponentValidation.ValidateAsync(db, request.Name, request.Description, request.Sequence, request.ProviderDivisionId,
+        await ComponentValidation.ValidateAsync(db, request.Name, request.Description, request.ProviderDivisionId,
             request.ReceivingDivisionId, request.PrimaryOfficerId, request.DeputyOfficerId, request.DeadlineOffsetDays, ct);
     }
 
@@ -108,9 +103,9 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
             using var json = JsonDocument.Parse(row.DeadlineRuleJson);
             offset = json.RootElement.TryGetProperty("offsetDays", out var value) ? value.GetInt32() : 0;
         }
-        return new(row.Id, row.DefinitionVersionId, row.Name, row.Description, row.IsRequired, row.Sequence,
+        return new(row.Id, row.DefinitionVersionId, row.Name, row.Description,
             row.ProviderDivisionId, row.PrimaryOfficerId, row.DeputyOfficerId, row.ReceivingDivisionId,
-            row.ReceiptConfirmationRequired, row.EvidenceRequired, offset,
+            offset,
             ComponentValidation.Contributors(row.ContributorsJson, row.PrimaryOfficerId, row.DeputyOfficerId));
     }
 }

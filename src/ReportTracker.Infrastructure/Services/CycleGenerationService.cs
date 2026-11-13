@@ -35,7 +35,7 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             var version = report.Versions.Where(x => x.EffectiveFrom <= throughLocalDate && (!x.EffectiveTo.HasValue || x.EffectiveTo >= today))
                 .OrderByDescending(x => x.VersionNumber).FirstOrDefault();
             if (version is null || version.Frequency == Frequency.AdHoc) continue;
-            var components = await db.ComponentDefinitions.Where(x => x.DefinitionVersionId == version.Id).OrderBy(x => x.Sequence).ToListAsync(ct);
+            var components = await db.ComponentDefinitions.Where(x => x.DefinitionVersionId == version.Id).OrderBy(x => x.Name).ThenBy(x => x.Id).ToListAsync(ct);
             var mainAssignment = assignments.Where(x => x.ReportDefinitionId == report.Id).OrderByDescending(x => x.EffectiveFromUtc).FirstOrDefault();
             if (!activeDivisions.Contains(report.OwnerDivisionId) || !report.SubmittingDivisionId.HasValue || !activeDivisions.Contains(report.SubmittingDivisionId.Value) ||
                 mainAssignment is null || mainAssignment.DivisionId != report.SubmittingDivisionId ||
@@ -72,12 +72,12 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                     var leadDays = component.DeadlineRuleJson is null ? version.ComponentDeadlineOffsetDays : ParseOffset(component.DeadlineRuleJson, version.ComponentDeadlineOffsetDays);
                     var dueUtc = mainDueUtc.AddDays(-leadDays);
                     cycle.Obligations.Add(new TrackingObligation { ReportCycleId = cycle.Id, ParentObligationId = main.Id, Type = ObligationType.Internal,
-                        Name = component.Name, IsRequired = component.IsRequired, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
+                        Name = component.Name, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
                         DeputyOfficerId = component.DeputyOfficerId, ReceivingDivisionId = report.ReceivingDivisionId ?? component.ReceivingDivisionId,
                         ContributorsJson = component.ContributorsJson ?? JsonSerializer.Serialize(ComponentValidation.Contributors(null, component.PrimaryOfficerId, component.DeputyOfficerId)),
                         Recipient = (report.ReceivingDivisionId ?? component.ReceivingDivisionId).ToString(), OriginalDueAtUtc = dueUtc,
-                        EffectiveDueAtUtc = dueUtc, ReceiptStatus = component.ReceiptConfirmationRequired ? ReceiptStatus.AwaitingConfirmation : ReceiptStatus.NotRequired,
-                        EvidenceStatus = component.EvidenceRequired ? EvidenceStatus.Missing : EvidenceStatus.NotRequired } );
+                        EffectiveDueAtUtc = dueUtc, ReceiptStatus = ReceiptStatus.NotRequired,
+                        EvidenceStatus = EvidenceStatus.NotRequired } );
                     componentsCreated++;
                 }
                 db.ReportCycles.Add(cycle);

@@ -37,11 +37,11 @@ namespace ReportTracker.Infrastructure.Persistence.Migrations
             // Automatically generated internal tasks already store the receiving division's GUID as Recipient.
             // Preserve that explicit mapping; do not guess ownership from a person's or division's free-text name.
             migrationBuilder.Sql("""
-                UPDATE obligation
+                EXEC(N'UPDATE obligation
                 SET ReceivingDivisionId = division.Id
                 FROM tracker.TrackingObligations AS obligation
                 INNER JOIN tracker.Divisions AS division ON division.Id = TRY_CONVERT(uniqueidentifier, obligation.Recipient)
-                WHERE obligation.Type = 1 AND obligation.ReceivingDivisionId IS NULL AND LEN(obligation.Recipient) = 36;
+                WHERE obligation.Type = 1 AND obligation.ReceivingDivisionId IS NULL AND LEN(obligation.Recipient) = 36;');
                 """);
         }
 
