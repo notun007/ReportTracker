@@ -12,6 +12,15 @@ public sealed record SessionUser(Guid Id, string DisplayName, string Email, Guid
 public sealed record SessionResponse(bool SetupRequired, SessionUser? User);
 public sealed record LookupItem(Guid Id, string Name);
 public sealed record DivisionItem(Guid Id, string Code, string Name, bool IsActive);
+public sealed record ReportingFrequencyItem(int Id, string Code, string Name, int DisplayOrder);
+public sealed record SchedulePresetRule(string Code, string Name, int DisplayOrder, string ReportingPeriod, string FinalDeadline,
+    int MonthsPerPeriod, string PeriodEndDays, int DeadlineMonthOffset, int? FixedDeadlineDay);
+public sealed record SchedulePresetItem(Guid Id, string RuleCode, string Name, int Version, int DisplayOrder, string ReportingPeriod, string FinalDeadline,
+    IReadOnlyList<WeeklyPresetPeriod>? WeeklyPeriods = null);
+public sealed record SchedulePresetDirectory(IReadOnlyList<SchedulePresetRule> Rules, IReadOnlyList<SchedulePresetItem> Saved);
+public sealed record SchedulePresetPeriod(DateOnly PeriodStart, DateOnly PeriodEnd, DateOnly FinalDeadline);
+public sealed record WeeklyPresetPeriod(int StartDay, int? EndDay, int? StartMonth = null, int? EndMonth = null);
+public sealed record CreateSchedulePresetRequest([Required, StringLength(32)] string RuleCode, IReadOnlyList<WeeklyPresetPeriod>? WeeklyPeriods = null);
 public sealed record UserItem(Guid Id, string EmployeeId, string DisplayName, string Email, string? MobileNumber, Guid DivisionId, bool IsActive, IReadOnlyList<string> Roles);
 public sealed record CreateUserRequest(
     [Required, StringLength(40)] string EmployeeId, [Required, StringLength(150)] string DisplayName,

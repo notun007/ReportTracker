@@ -1445,3 +1445,144 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060017_SchedulePresets'
+)
+BEGIN
+    CREATE TABLE [tracker].[SchedulePresets] (
+        [Id] uniqueidentifier NOT NULL,
+        [RuleCode] nvarchar(32) NOT NULL,
+        [Name] nvarchar(100) NOT NULL,
+        [Version] int NOT NULL,
+        [MonthsPerPeriod] int NOT NULL,
+        [PeriodEndDays] nvarchar(16) NOT NULL,
+        [DeadlineMonthOffset] int NOT NULL,
+        [FixedDeadlineDay] int NULL,
+        [CreatedAtUtc] datetime2 NOT NULL,
+        [UpdatedAtUtc] datetime2 NULL,
+        [RowVersion] rowversion NOT NULL,
+        CONSTRAINT [PK_SchedulePresets] PRIMARY KEY ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060017_SchedulePresets'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_SchedulePresets_RuleCode_Version] ON [tracker].[SchedulePresets] ([RuleCode], [Version]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060017_SchedulePresets'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261114060017_SchedulePresets', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060100_SchedulePresetDisplayOrder'
+)
+BEGIN
+    ALTER TABLE [tracker].[SchedulePresets] ADD [DisplayOrder] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060100_SchedulePresetDisplayOrder'
+)
+BEGIN
+    EXEC(N'UPDATE [tracker].[SchedulePresets]
+    SET [DisplayOrder] = CASE [RuleCode]
+        WHEN N''weekly'' THEN 1
+        WHEN N''twice-monthly'' THEN 2
+        WHEN N''monthly'' THEN 3
+        WHEN N''quarterly'' THEN 4
+        WHEN N''half-yearly'' THEN 5
+        WHEN N''yearly'' THEN 6
+        ELSE 7
+    END;');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060100_SchedulePresetDisplayOrder'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261114060100_SchedulePresetDisplayOrder', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060200_ReportingFrequencies'
+)
+BEGIN
+    CREATE TABLE [tracker].[ReportingFrequencies] (
+        [Id] int NOT NULL IDENTITY,
+        [Code] nvarchar(32) NOT NULL,
+        [Name] nvarchar(100) NOT NULL,
+        [DisplayOrder] int NOT NULL,
+        CONSTRAINT [PK_ReportingFrequencies] PRIMARY KEY ([Id])
+    );
+
+    CREATE UNIQUE INDEX [IX_ReportingFrequencies_Code] ON [tracker].[ReportingFrequencies] ([Code]);
+
+    EXEC(N'SET IDENTITY_INSERT [tracker].[ReportingFrequencies] ON;
+    INSERT INTO [tracker].[ReportingFrequencies] ([Id], [Code], [Name], [DisplayOrder])
+    VALUES (1, N''weekly'', N''Weakly'', 1),
+           (2, N''twice-monthly'', N''Biweekly'', 2),
+           (3, N''monthly'', N''Monthly'', 3),
+           (4, N''quarterly'', N''Quarterly'', 4),
+           (5, N''half-yearly'', N''Half-Yearly'', 5),
+           (6, N''yearly'', N''Yearly'', 6);
+    SET IDENTITY_INSERT [tracker].[ReportingFrequencies] OFF;');
+
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261114060200_ReportingFrequencies', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060300_WeeklyPresetStartDays'
+)
+BEGIN
+    ALTER TABLE [tracker].[SchedulePresets] ADD [WeeklyStartDays] nvarchar(11) NULL;
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261114060300_WeeklyPresetStartDays', N'10.0.10');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261114060400_MonthlyPresetDays'
+)
+BEGIN
+    ALTER TABLE [tracker].[SchedulePresets] ALTER COLUMN [PeriodEndDays] nvarchar(47) NOT NULL;
+    ALTER TABLE [tracker].[SchedulePresets] ALTER COLUMN [WeeklyStartDays] nvarchar(35) NULL;
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261114060400_MonthlyPresetDays', N'10.0.10');
+END;
+COMMIT;
+GO

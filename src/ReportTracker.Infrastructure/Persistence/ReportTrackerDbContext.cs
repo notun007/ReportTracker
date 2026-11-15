@@ -33,6 +33,8 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
     public DbSet<ResponsibilityAssignment> ResponsibilityAssignments => Set<ResponsibilityAssignment>();
     public DbSet<ScheduleRule> ScheduleRules => Set<ScheduleRule>();
+    public DbSet<ReportingFrequency> ReportingFrequencies => Set<ReportingFrequency>();
+    public DbSet<SchedulePreset> SchedulePresets => Set<SchedulePreset>();
     public DbSet<StatusAmendment> StatusAmendments => Set<StatusAmendment>();
     public DbSet<ExtensionDecision> ExtensionDecisions => Set<ExtensionDecision>();
     public DbSet<ReminderPolicy> ReminderPolicies => Set<ReminderPolicy>();
@@ -73,6 +75,14 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
         modelBuilder.Entity<ReportSubmissionDepartment>().HasOne(x => x.Department).WithMany()
             .HasForeignKey(x => x.DepartmentId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<DefinitionVersion>().HasIndex(x => new { x.ReportDefinitionId, x.VersionNumber }).IsUnique();
+        modelBuilder.Entity<ReportingFrequency>().Property(x => x.Code).HasMaxLength(32);
+        modelBuilder.Entity<ReportingFrequency>().Property(x => x.Name).HasMaxLength(100);
+        modelBuilder.Entity<ReportingFrequency>().HasIndex(x => x.Code).IsUnique();
+        modelBuilder.Entity<SchedulePreset>().Property(x => x.RuleCode).HasMaxLength(32);
+        modelBuilder.Entity<SchedulePreset>().Property(x => x.Name).HasMaxLength(100);
+        modelBuilder.Entity<SchedulePreset>().Property(x => x.PeriodEndDays).HasMaxLength(47);
+        modelBuilder.Entity<SchedulePreset>().Property(x => x.WeeklyStartDays).HasMaxLength(35);
+        modelBuilder.Entity<SchedulePreset>().HasIndex(x => new { x.RuleCode, x.Version }).IsUnique();
         modelBuilder.Entity<ReportCycle>().HasIndex(x => new { x.ReportDefinitionId, x.PeriodKey }).IsUnique();
         modelBuilder.Entity<ChannelRequirement>().HasIndex(x => new { x.TrackingObligationId, x.Channel }).IsUnique();
         modelBuilder.Entity<AppRole>().HasIndex(x => x.Name).IsUnique();

@@ -29,6 +29,27 @@ public sealed class ScheduleRule : Entity
     public bool HolidayAdjustmentAuthorized { get; set; }
 }
 
+public sealed class ReportingFrequency
+{
+    public int Id { get; set; }
+    public required string Code { get; set; }
+    public required string Name { get; set; }
+    public int DisplayOrder { get; set; }
+}
+
+public sealed class SchedulePreset : Entity
+{
+    public required string RuleCode { get; set; }
+    public required string Name { get; set; }
+    public int DisplayOrder { get; set; }
+    public int Version { get; set; }
+    public int MonthsPerPeriod { get; set; }
+    public required string PeriodEndDays { get; set; }
+    public string? WeeklyStartDays { get; set; }
+    public int DeadlineMonthOffset { get; set; }
+    public int? FixedDeadlineDay { get; set; }
+}
+
 public sealed class StatusAmendment : Entity
 {
     public Guid TrackingObligationId { get; set; }
