@@ -22,7 +22,8 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         return Ok(new
         {
             Divisions = await db.Divisions.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => new LookupItem(x.Id, x.Name)).ToListAsync(ct),
-            Officers = await db.Users.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.DisplayName).Select(x => new { x.Id, Name = x.DisplayName, x.DivisionId }).ToListAsync(ct)
+            Officers = await db.Users.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.DisplayName).Select(x => new { x.Id, Name = x.DisplayName, x.DivisionId }).ToListAsync(ct),
+            ReportTypes = await db.ReportTypes.AsNoTracking().OrderBy(x => x.Id).Select(x => new ReportTypeItem(x.Id, x.Name)).ToListAsync(ct)
         });
     }
 
@@ -35,7 +36,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
                 (!g.DivisionId.HasValue || g.DivisionId == x.OwnerDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.Id)))
             .OrderBy(x => x.Name).Select(x => new
             {
-                x.Id, x.Code, x.Name, x.OwnerDivisionId, x.SubmittingDivisionId, x.ReceivingDivisionId, x.BbRecipient,
+                x.Id, x.Code, x.Name, x.ReportTypeId, ReportTypeName = x.ReportTypeId == 1 ? "RIT" : "None RIT", x.OwnerDivisionId, x.SubmittingDivisionId, x.ReceivingDivisionId, x.BbRecipient,
                 x.SubmissionRecipientId, x.InstructionReference, x.Description,
                 RecipientName = x.SubmissionRecipient != null ? x.SubmissionRecipient.Name : x.BbRecipient,
                 Departments = x.SubmissionDepartments.Select(d => new { d.DepartmentId, d.Department.Name }).ToList(),
@@ -49,6 +50,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
             x.EffectiveFromUtc <= now && (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc > now)).OrderByDescending(x => x.EffectiveFromUtc).ToListAsync(ct);
         return Ok(reports.Select(x => { var sender = assignments.FirstOrDefault(a => a.ReportDefinitionId == x.Id && a.DivisionId == x.SubmittingDivisionId);
             return new ReportItem(x.Id, x.Code, x.Name, x.OwnerDivisionId, x.BbRecipient, (x.Version?.Frequency ?? default).ToString(), x.CycleCount,
+                x.ReportTypeId, x.ReportTypeName,
                 x.SubmittingDivisionId, sender?.PrimaryOfficerId, sender?.DeputyOfficerId, x.ReceivingDivisionId,
                 x.SubmissionRecipientId, x.Departments.Select(d => d.DepartmentId).ToArray(),
                 ReportDefinition.FormatSubmissionDestination(x.RecipientName, x.Departments.Select(d => d.Name)),
@@ -60,6 +62,8 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     public async Task<IActionResult> CreateReport(CreateReportRequest request, CancellationToken ct)
     {
         await access.RequireAsync("reports.manage", request.OwnerDivisionId, null, ct);
+        if (request.ReportTypeId is not (1 or 2))
+            throw new TrackingValidationException("Choose a valid report type.");
         var recipient = request.SubmissionRecipientId is Guid recipientId
             ? await ValidateDestination(recipientId, request.SubmissionDepartmentIds, ct)
             : null;
@@ -87,7 +91,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         }
         if (components.Select(x => x.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != components.Count)
             throw new TrackingValidationException("Component names must be unique within a report.");
-        var report = new ReportDefinition { Code = request.Code.Trim().ToUpperInvariant(), Name = request.Name.Trim(), Description = request.Description?.Trim(),
+        var report = new ReportDefinition { Code = request.Code.Trim().ToUpperInvariant(), Name = request.Name.Trim(), ReportTypeId = request.ReportTypeId, Description = request.Description?.Trim(),
             OwnerDivisionId = request.OwnerDivisionId, SubmittingDivisionId = request.SubmittingDivisionId, ReceivingDivisionId = request.ReceivingDivisionId,
             BbRecipient = recipient?.Name ?? request.BbRecipient!.Trim(), SubmissionRecipientId = recipient?.Id,
             InstructionReference = request.InstructionReference?.Trim() };

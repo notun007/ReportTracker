@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.Configuration;
+using Oracle.EntityFrameworkCore;
 
 namespace ReportTracker.Infrastructure.Persistence;
 
@@ -16,10 +17,14 @@ public sealed class ReportTrackerDesignTimeDbContextFactory : IDesignTimeDbConte
             .AddJsonFile(secretsPath, optional: true)
             .AddEnvironmentVariables()
             .Build();
-        var connectionString = configuration.GetConnectionString("ReportTracker")
-            ?? "Server=(localdb)\\mssqllocaldb;Database=ReportTrackerDesign;Trusted_Connection=True;TrustServerCertificate=True";
+        var connectionString = configuration.GetConnectionString("Oracle")
+            ?? throw new InvalidOperationException(
+                "Connection string 'Oracle' is required for design-time operations. " +
+                "Set ConnectionStrings__Oracle or configure it in API user secrets.");
         return new ReportTrackerDbContext(new DbContextOptionsBuilder<ReportTrackerDbContext>()
-            .UseSqlServer(connectionString)
+            .UseOracle(connectionString, oracle =>
+                oracle.UseOracleSQLCompatibility(OracleSQLCompatibility.DatabaseVersion19)
+                    .MigrationsHistoryTable("rt_ef_migrations_history"))
             .Options);
     }
 }

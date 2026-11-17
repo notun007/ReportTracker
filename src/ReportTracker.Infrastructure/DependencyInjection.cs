@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Oracle.EntityFrameworkCore;
 using ReportTracker.Application.Abstractions;
 using ReportTracker.Infrastructure.Persistence;
 using ReportTracker.Infrastructure.Services;
@@ -11,12 +12,14 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        var connectionString = configuration.GetConnectionString("ReportTracker");
+        var connectionString = configuration.GetConnectionString("Oracle");
         if (string.IsNullOrWhiteSpace(connectionString))
-            throw new InvalidOperationException("Connection string 'ReportTracker' is not configured. Set ConnectionStrings__ReportTracker or use development user secrets.");
+            throw new InvalidOperationException("Connection string 'Oracle' is not configured. Set ConnectionStrings__Oracle or use development user secrets.");
 
         services.AddDbContext<ReportTrackerDbContext>(options =>
-            options.UseSqlServer(connectionString, sql => sql.EnableRetryOnFailure(5)));
+            options.UseOracle(connectionString, oracle =>
+                oracle.UseOracleSQLCompatibility(OracleSQLCompatibility.DatabaseVersion19)
+                    .MigrationsHistoryTable("rt_ef_migrations_history")));
         services.AddScoped<ITrackingService, TrackingService>();
         services.AddScoped<ICycleGenerationService, CycleGenerationService>();
         services.AddScoped<INotificationAutomationService, NotificationAutomationService>();

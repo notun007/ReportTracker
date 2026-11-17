@@ -11,6 +11,30 @@ namespace ReportTracker.Tests;
 
 public sealed class ReportingFrequencyLookupTests
 {
+    [Fact]
+    public async Task Administrator_can_create_and_update_supported_reporting_frequency()
+    {
+        await using var db = new ReportTrackerDbContext(new DbContextOptionsBuilder<ReportTrackerDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var user = new AppUser { EmployeeId = "ADMIN", DisplayName = "Administrator", Email = "admin@example.test" };
+        var role = new AppRole { Name = "System Administrator" };
+        var permission = new Permission { Code = "administration.manage", Name = "Manage administration" };
+        db.AddRange(user, role, permission,
+            new UserRole { UserId = user.Id, RoleId = role.Id },
+            new RolePermission { RoleId = role.Id, PermissionId = permission.Id });
+        await db.SaveChangesAsync();
+        var controller = new ReportingFrequenciesController(db, new TrackingAccess(db, new Actor(user.Id)));
+
+        var created = await controller.Create(new CreateReportingFrequencyRequest("MONTHLY", "Calendar month", 3), default);
+        var item = Assert.IsType<ReportingFrequencyItem>(Assert.IsType<CreatedResult>(created.Result).Value);
+        Assert.Equal("monthly", item.Code);
+
+        var updated = await controller.Update(item.Id, new UpdateReportingFrequencyRequest("Monthly", 4), default);
+        var saved = Assert.IsType<ReportingFrequencyItem>(Assert.IsType<OkObjectResult>(updated.Result).Value);
+        Assert.Equal("Monthly", saved.Name);
+        Assert.Equal(4, saved.DisplayOrder);
+    }
+
     [Theory]
     [InlineData("administration.manage")]
     [InlineData("reports.manage")]

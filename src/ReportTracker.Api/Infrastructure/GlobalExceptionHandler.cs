@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Oracle.ManagedDataAccess.Client;
 using ReportTracker.Application.Contracts;
-using Microsoft.Data.SqlClient;
 
 namespace ReportTracker.Api.Infrastructure;
 
@@ -13,7 +13,8 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         var status = exception switch
         {
             DbUpdateConcurrencyException or TrackingConflictException => StatusCodes.Status409Conflict,
-            DbUpdateException { InnerException: SqlException { Number: 2601 or 2627 } } => StatusCodes.Status409Conflict,
+            DbUpdateException { InnerException: OracleException { Number: 1 } } => StatusCodes.Status409Conflict,
+            DbUpdateException { InnerException: OracleException { Number: 8177 } } => StatusCodes.Status409Conflict,
             TrackingValidationException => StatusCodes.Status400BadRequest,
             UnauthorizedAccessException => StatusCodes.Status403Forbidden,
             _ => StatusCodes.Status500InternalServerError

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using ReportTracker.Domain.Common;
 using ReportTracker.Domain.Entities;
+using System.Security.Cryptography;
 
 namespace ReportTracker.Infrastructure.Persistence;
 
@@ -12,6 +13,7 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
     public DbSet<LocalCredential> LocalCredentials => Set<LocalCredential>();
     public DbSet<Delegation> Delegations => Set<Delegation>();
     public DbSet<ReportDefinition> ReportDefinitions => Set<ReportDefinition>();
+    public DbSet<ReportType> ReportTypes => Set<ReportType>();
     public DbSet<SubmissionRecipient> SubmissionRecipients => Set<SubmissionRecipient>();
     public DbSet<SubmissionRecipientDepartment> SubmissionRecipientDepartments => Set<SubmissionRecipientDepartment>();
     public DbSet<ReportSubmissionDepartment> ReportSubmissionDepartments => Set<ReportSubmissionDepartment>();
@@ -47,12 +49,14 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
-        modelBuilder.HasDefaultSchema("tracker");
 
         foreach (var entityType in modelBuilder.Model.GetEntityTypes()
                      .Where(x => typeof(Entity).IsAssignableFrom(x.ClrType)))
         {
-            modelBuilder.Entity(entityType.ClrType).Property(nameof(Entity.RowVersion)).IsRowVersion();
+            modelBuilder.Entity(entityType.ClrType).Property(nameof(Entity.RowVersion))
+                .IsConcurrencyToken()
+                .ValueGeneratedNever()
+                .HasColumnType("RAW(8)");
         }
 
         modelBuilder.Entity<Division>().HasIndex(x => x.Code).IsUnique();
@@ -61,6 +65,13 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
         modelBuilder.Entity<LocalCredential>().HasIndex(x => x.UserId).IsUnique();
         modelBuilder.Entity<LocalCredential>().HasOne<AppUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<ReportDefinition>().HasIndex(x => x.Code).IsUnique();
+        modelBuilder.Entity<ReportType>().Property(x => x.Name).HasMaxLength(50);
+        modelBuilder.Entity<ReportType>().HasData(
+            new ReportType { Id = 1, Name = "RIT" },
+            new ReportType { Id = 2, Name = "None RIT" });
+        modelBuilder.Entity<ReportDefinition>().Property(x => x.ReportTypeId).HasDefaultValue(2);
+        modelBuilder.Entity<ReportDefinition>().HasOne(x => x.ReportType).WithMany()
+            .HasForeignKey(x => x.ReportTypeId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<SubmissionRecipient>().Property(x => x.Name).HasMaxLength(250);
         modelBuilder.Entity<SubmissionRecipient>().HasIndex(x => x.Name).IsUnique();
         modelBuilder.Entity<SubmissionRecipientDepartment>().Property(x => x.Name).HasMaxLength(150);
@@ -116,14 +127,31 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
         modelBuilder.Entity<TrackingObligation>().Property(x => x.IsRequired).HasDefaultValue(true);
         modelBuilder.Entity<SendingEvent>().Property(x => x.TrackingRemarks).HasMaxLength(1000);
         modelBuilder.Entity<CorrectionCase>().Property(x => x.Explanation).HasMaxLength(1000);
-        modelBuilder.Entity<AuditEvent>().Property(x => x.DataJson).HasColumnType("nvarchar(max)");
+        modelBuilder.Entity<AuditEvent>().Property(x => x.DataJson).HasColumnType("NCLOB");
+
+        modelBuilder.ApplyOracleConventions();
+        modelBuilder.Entity<AuditEvent>().ToTable(table =>
+            table.HasCheckConstraint("ck_rt_audit_events_data_json", "\"data_json\" IS JSON"));
+        modelBuilder.Entity<DefinitionVersion>().ToTable(table =>
+            table.HasCheckConstraint("ck_rt_definition_versions_schedule_json", "\"schedule_rule_json\" IS NULL OR \"schedule_rule_json\" IS JSON"));
+        modelBuilder.Entity<ComponentDefinition>().ToTable(table =>
+        {
+            table.HasCheckConstraint("ck_rt_component_definitions_deadline_json", "\"deadline_rule_json\" IS NULL OR \"deadline_rule_json\" IS JSON");
+            table.HasCheckConstraint("ck_rt_component_definitions_contributors_json", "\"contributors_json\" IS NULL OR \"contributors_json\" IS JSON");
+        });
+        modelBuilder.Entity<TrackingObligation>().ToTable(table =>
+            table.HasCheckConstraint("ck_rt_tracking_obligations_contributors_json", "\"contributors_json\" IS NULL OR \"contributors_json\" IS JSON"));
     }
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        foreach (var entry in ChangeTracker.Entries<Entity>().Where(x => x.State == EntityState.Modified))
+        foreach (var entry in ChangeTracker.Entries<Entity>()
+                     .Where(x => x.State is EntityState.Added or EntityState.Modified))
         {
-            entry.Entity.UpdatedAtUtc = DateTime.UtcNow;
+            if (entry.State == EntityState.Modified)
+                entry.Entity.UpdatedAtUtc = DateTime.UtcNow;
+
+            entry.Entity.RowVersion = RandomNumberGenerator.GetBytes(8);
         }
 
         return await base.SaveChangesAsync(cancellationToken);

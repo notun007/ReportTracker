@@ -5,4 +5,6 @@ namespace ReportTracker.Application.Abstractions;
 public interface ICycleGenerationService
 {
     Task<GenerationResult> GenerateAsync(DateOnly throughLocalDate, CancellationToken cancellationToken);
+    Task<YearlyCyclePreview> PreviewYearAsync(int year, CancellationToken cancellationToken);
+    Task<YearlyCycleGenerationResult> GenerateYearAsync(int year, CancellationToken cancellationToken);
 }

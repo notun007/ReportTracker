@@ -41,7 +41,12 @@ public sealed class AuthController(ReportTrackerDbContext db, IAntiforgery antif
         AppUser? created = null;
         await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
         {
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            // Oracle SERIALIZABLE can fail with ORA-08177 when concurrent application activity
+            // changes a recently created data block. Serialize only first-time setup attempts by
+            // locking the user table; normal reads, including the session check, remain available.
+            if (db.Database.IsOracle())
+                await db.Database.ExecuteSqlRawAsync("LOCK TABLE \"rt_app_users\" IN EXCLUSIVE MODE", ct);
             if (await db.Users.AnyAsync(ct)) throw new TrackingConflictException("Initial setup is already complete. Sign in instead.");
             var division = new Division { Code = request.DivisionCode.Trim().ToUpperInvariant(), Name = request.DivisionName.Trim() };
             var user = new AppUser { EmployeeId = request.EmployeeId.Trim(), DisplayName = request.DisplayName.Trim(), Email = request.Email.Trim().ToLowerInvariant(), DivisionId = division.Id };

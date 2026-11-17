@@ -41,10 +41,12 @@ public sealed class DivisionResponsibilityTests
         (await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id)).ReportDefinitionId = null;
         await db.SaveChangesAsync();
         var request = new CreateReportRequest("NEW", "New report", null, f.C.Id, "BB", null, "Monthly",
-            SubmittingDivisionId: f.D.Id, PrimarySubmittingOfficerId: f.Submitter.Id, ReceivingDivisionId: f.C.Id);
+            SubmittingDivisionId: f.D.Id, PrimarySubmittingOfficerId: f.Submitter.Id, ReceivingDivisionId: f.C.Id, ReportTypeId: 1);
+        await Assert.ThrowsAsync<TrackingValidationException>(() =>
+            Controller(db, f.Coordinator.Id).CreateReport(request with { ReportTypeId = 3 }, default));
         Assert.IsType<CreatedResult>(await Controller(db, f.Coordinator.Id).CreateReport(request, default));
         var report = await db.ReportDefinitions.SingleAsync(x => x.Code == "NEW");
-        Assert.Equal(f.C.Id, report.OwnerDivisionId); Assert.Equal(f.D.Id, report.SubmittingDivisionId);
+        Assert.Equal(f.C.Id, report.OwnerDivisionId); Assert.Equal(f.D.Id, report.SubmittingDivisionId); Assert.Equal(1, report.ReportTypeId);
         var assignment = await db.ResponsibilityAssignments.SingleAsync(x => x.ReportDefinitionId == report.Id);
         Assert.Equal(f.D.Id, assignment.DivisionId); Assert.Equal(f.Submitter.Id, assignment.PrimaryOfficerId);
     }
@@ -68,6 +70,29 @@ public sealed class DivisionResponsibilityTests
         }
         Assert.Equal(f.C.Id, f.Report.OwnerDivisionId);
         Assert.Equal(0, (await generator.GenerateAsync(Today().AddDays(60), default)).CyclesCreated);
+    }
+
+    [Fact]
+    public async Task Yearly_monthly_generation_creates_all_twelve_calendar_cycles_without_a_saved_preset()
+    {
+        using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); await Seed(db);
+        var generator = scope.ServiceProvider.GetRequiredService<ICycleGenerationService>();
+        var year = Today().Year;
+
+        var preview = await generator.PreviewYearAsync(year, default);
+
+        Assert.Equal(12, preview.TotalCycles);
+        Assert.Equal(12, preview.NewCycles);
+        Assert.Equal(0, preview.SkippedCycles);
+        Assert.Equal(new DateOnly(year, 1, 1), preview.Items.First().PeriodStart);
+        Assert.Equal(new DateOnly(year, 12, 31), preview.Items.Last().PeriodEnd);
+
+        var result = await generator.GenerateYearAsync(year, default);
+
+        Assert.Equal(12, result.CyclesCreated);
+        Assert.Equal(12, await db.ReportCycles.CountAsync());
+        Assert.Equal(0, result.SkippedCycles);
     }
 
     [Theory]
@@ -231,7 +256,11 @@ public sealed class DivisionResponsibilityTests
     private static ServiceProvider Provider()
     {
         var services = new ServiceCollection();
-        services.AddInfrastructure(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> { ["ConnectionStrings:ReportTracker"] = "Server=unused", ["Automation:Enabled"] = "false" }).Build());
+        services.AddInfrastructure(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>
+        {
+            ["ConnectionStrings:Oracle"] = "User Id=unused;Password=unused;Data Source=unused",
+            ["Automation:Enabled"] = "false"
+        }).Build());
         services.RemoveAll<DbContextOptions<ReportTrackerDbContext>>();
         services.AddSingleton(new DbContextOptionsBuilder<ReportTrackerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         return services.BuildServiceProvider();

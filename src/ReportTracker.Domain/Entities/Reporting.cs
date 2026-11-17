@@ -22,10 +22,18 @@ public sealed class ReportSubmissionDepartment
     public SubmissionRecipientDepartment Department { get; set; } = null!;
 }
 
+public sealed class ReportType
+{
+    public int Id { get; set; }
+    public required string Name { get; set; }
+}
+
 public sealed class ReportDefinition : Entity
 {
     public required string Code { get; set; }
     public required string Name { get; set; }
+    public int ReportTypeId { get; set; } = 2;
+    public ReportType ReportType { get; set; } = null!;
     public string? Description { get; set; }
     public Guid OwnerDivisionId { get; set; }
     public Guid? SubmittingDivisionId { get; set; }

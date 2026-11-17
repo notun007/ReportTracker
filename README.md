@@ -6,17 +6,18 @@ Reporting Tracker records internal handovers and final submissions to configured
 
 - `src/ReportTracker.Domain`: tracking entities and status vocabulary.
 - `src/ReportTracker.Application`: contracts, validation and deadline rules.
-- `src/ReportTracker.Infrastructure`: EF Core 10, SQL Server and scoped tracking services.
+- `src/ReportTracker.Infrastructure`: EF Core 10, Oracle 19c and scoped tracking services.
 - `src/ReportTracker.Api`: ASP.NET Core 10 REST API, local sessions and optional SSO bearer validation.
 - `../ReportTracker.Web`: Angular 22 standalone client in the sibling repository.
-- `database/ReportTracker.sql`: idempotent SQL Server deployment script containing the complete current migration history.
+- `database/ReportTracker.Oracle.sql`: Oracle 19c baseline deployment script using `rt_`-prefixed snake-case identifiers.
+- `database/ReportTracker.sql`: retained historical SQL Server deployment script; do not apply it to Oracle.
 
 ## Configuration
 
 The existing local connection is stored in ASP.NET Core user secrets for this API project and loads automatically in Development. For another machine or deployment, configure its own secret or environment variable. Do not commit database passwords.
 
 ```powershell
-$env:ConnectionStrings__ReportTracker = 'Server=YOUR_SERVER;Database=ReportTracker;User ID=YOUR_USER;Password=YOUR_PASSWORD;TrustServerCertificate=True'
+$env:ConnectionStrings__Oracle = 'User Id=YOUR_SCHEMA;Password=YOUR_PASSWORD;Data Source=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=YOUR_HOST)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=YOUR_SERVICE)));Pooling=true;Connection Timeout=60;'
 ```
 
 Local accounts are enabled by default. Passwords use ASP.NET Core's versioned PBKDF2 password hasher. Five failed sign-in attempts lock the account for 15 minutes. Sessions use HttpOnly cookies with an eight-hour absolute lifetime. Cookie-authenticated changes require the antiforgery header supplied by Angular. The browser uses the application-specific `ReportTracker.XSRF-TOKEN` cookie so other localhost apps cannot overwrite its request token. Sign-in/setup/logout refresh the token first. Only an explicit `csrf_token_invalid` response from the pre-action validation filter triggers one automatic refresh and retry; business validation and authentication failures are not replayed. Restart the API and refresh the client together after updating this token configuration.
@@ -27,17 +28,19 @@ Recurring cycle and notification workers are enabled by default. Set `Automation
 
 ## Create or upgrade the database
 
-Create the target database, then apply `database/ReportTracker.sql`. For SQLCMD, use `-I` to enable QUOTED_IDENTIFIER, which the filtered indexes require, and `-b` to stop on errors. Supply credentials through a protected mechanism such as `SQLCMDPASSWORD`, not committed scripts.
+Have the DBA create the Oracle schema with the required object privileges and tablespace quota, then apply `database/ReportTracker.Oracle.sql` while connected as that schema. Supply credentials through an approved secret store and never commit them.
+
+The application owns 37 `rt_`-prefixed domain tables plus the EF migration ledger `rt_ef_migrations_history`. Domain tables and columns use quoted lower-snake-case Oracle identifiers.
 
 ```powershell
-sqlcmd -S YOUR_SERVER -d ReportTracker -U YOUR_USER -C -I -b -i database/ReportTracker.sql
+sqlplus YOUR_SCHEMA@YOUR_SERVICE @database/ReportTracker.Oracle.sql
 ```
 
 To regenerate the deployment script:
 
 ```powershell
 dotnet tool restore --tool-manifest dotnet-tools.json
-dotnet tool run dotnet-ef migrations script --idempotent --project src/ReportTracker.Infrastructure --startup-project src/ReportTracker.Api --output database/ReportTracker.sql
+dotnet tool run dotnet-ef migrations script 0 OracleInitialCreate --project src/ReportTracker.Infrastructure --startup-project src/ReportTracker.Api --output database/ReportTracker.Oracle.sql
 ```
 
 Do not apply migrations automatically during application startup.
@@ -71,7 +74,7 @@ Submission controls show actions for the current user's responsibility. Sending 
 
 Recurring components copy their configured receiving division into each new task. Manual internal tasks requiring receipt confirmation must specify a receiving division. For older internal tasks, a coordinator can use **Manage → Receipt history → Receiving responsibility** to assign it. Existing explicit division GUID recipients are migrated automatically; free-text recipients are not used to guess receipt authority. Evidence and receipt histories remain available to authorized readers, with forms and review buttons shown only when the API grants the corresponding action.
 
-Duplicate report codes, account identifiers and report periods return HTTP 409. Sending updates include the SQL rowversion; a stale or already-completed record cannot be overwritten. The API derives the audit actor from the authenticated principal and enforces assignment or explicit scoped grants.
+Duplicate report codes, account identifiers and report periods return HTTP 409. Sending updates include an application-generated Oracle `RAW(8)` concurrency token; a stale or already-completed record cannot be overwritten. The API derives the audit actor from the authenticated principal and enforces assignment or explicit scoped grants.
 
 Report responsibilities distinguish four functions: component preparing division, component receiving division, report coordinating division, and final submitting division. For example, A and B prepare components, C receives them and coordinates the report, and D submits to BB. Coordinating and final submitting divisions may be the same or different. In the API/database, the existing `OwnerDivisionId` remains the coordinating division for compatibility; it is no longer used as the automatic final submitting division.
 
@@ -90,7 +93,7 @@ $env:Authentication__Audience = 'YOUR_API_AUDIENCE'
 
 The provider must issue a validated `user_id` claim containing the GUID of an active tracker user, or an explicit subject-to-user mapping must be implemented. Identity, role and scope grants remain in the tracker database. The browser authorization-code/PKCE flow still needs provider-specific integration. After SSO is verified, set `Authentication__LocalEnabled=false` to disable local login and bootstrap. Existing local sessions expire within eight hours.
 
-Use a same-origin HTTPS reverse proxy for the deployed client and API. Persist and protect ASP.NET Core Data Protection keys across deployments; multi-instance deployments must share the key ring and application name. Configure a bank-approved secret store and a least-privilege SQL application account.
+Use a same-origin HTTPS reverse proxy for the deployed client and API. Persist and protect ASP.NET Core Data Protection keys across deployments; multi-instance deployments must share the key ring and application name. Configure a bank-approved secret store and a least-privilege Oracle schema account.
 
 ## Verify
 

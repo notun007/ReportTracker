@@ -129,7 +129,7 @@ public sealed class TrackingWorkflowTests
         var other = Seed(db, Guid.NewGuid());
         await db.SaveChangesAsync();
         var service = provider.GetRequiredService<ITrackingService>();
-        Assert.True(await service.RecordSendingAsync(own.Id, Command(), default));
+        Assert.True(await service.RecordSendingAsync(own.Id, Command(rowVersion: own.RowVersion), default));
         Assert.Equal(actor, (await db.SendingEvents.SingleAsync()).ActingUserId);
         Assert.Equal(actor, (await db.AuditEvents.SingleAsync()).ActorUserId);
         Assert.Equal(SendingStatus.Sent, own.SendingStatus);
@@ -148,7 +148,7 @@ public sealed class TrackingWorkflowTests
         var own = Seed(db, actor);
         await db.SaveChangesAsync();
         var service = provider.GetRequiredService<ITrackingService>();
-        Assert.True(await service.RecordSendingAsync(own.Id, Command(true), default));
+        Assert.True(await service.RecordSendingAsync(own.Id, Command(true, own.RowVersion), default));
         Assert.Equal(SendingStatus.PartiallySent, own.SendingStatus);
         Assert.Equal(1, (await service.GetDashboardAsync(default)).MyPending);
     }
@@ -187,13 +187,17 @@ public sealed class TrackingWorkflowTests
         Assert.True(Enum.IsDefined(Frequency.Biweekly));
     }
 
-    private static RecordSendingCommand Command(bool partial = false) => new(DateTime.UtcNow.AddMinutes(-1), "BB", "Portal", "REF", partial,
-        partial ? ["Card"] : null, null, Convert.ToBase64String(new byte[8]));
+    private static RecordSendingCommand Command(bool partial = false, byte[]? rowVersion = null) =>
+        new(DateTime.UtcNow.AddMinutes(-1), "BB", "Portal", "REF", partial,
+            partial ? ["Card"] : null, null, Convert.ToBase64String(rowVersion ?? new byte[8]));
 
     private static ServiceProvider Provider(Guid actor)
     {
         var services = new ServiceCollection();
-        services.AddInfrastructure(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:ReportTracker"] = "Server=unused" }).Build());
+        services.AddInfrastructure(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Oracle"] = "User Id=unused;Password=unused;Data Source=unused"
+        }).Build());
         services.RemoveAll<DbContextOptions<ReportTrackerDbContext>>();
         services.AddSingleton(new DbContextOptionsBuilder<ReportTrackerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         services.AddSingleton<ICurrentUser>(new CurrentUser(actor));

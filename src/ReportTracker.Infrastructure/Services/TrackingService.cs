@@ -71,7 +71,7 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
         };
         obligation.SendingStatus = command.IsPartial ? SendingStatus.PartiallySent : SendingStatus.Sent;
         if (obligation.ReceiptStatus != ReceiptStatus.NotRequired) obligation.ReceiptStatus = ReceiptStatus.AwaitingConfirmation;
-        // A new partial declaration must still advance rowversion, even if the status was already partial.
+        // A new partial declaration must still advance the concurrency token, even if the status was already partial.
         obligation.UpdatedAtUtc = DateTime.UtcNow;
         db.SendingEvents.Add(sending);
         db.AuditEvents.Add(new AuditEvent

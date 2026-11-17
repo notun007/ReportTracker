@@ -12,7 +12,15 @@ public sealed record SessionUser(Guid Id, string DisplayName, string Email, Guid
 public sealed record SessionResponse(bool SetupRequired, SessionUser? User);
 public sealed record LookupItem(Guid Id, string Name);
 public sealed record DivisionItem(Guid Id, string Code, string Name, bool IsActive);
+public sealed record ReportTypeItem(int Id, string Name);
 public sealed record ReportingFrequencyItem(int Id, string Code, string Name, int DisplayOrder);
+public sealed record CreateReportingFrequencyRequest(
+    [Required, StringLength(32)] string Code,
+    [Required, StringLength(100)] string Name,
+    [Range(0, 9999)] int DisplayOrder);
+public sealed record UpdateReportingFrequencyRequest(
+    [Required, StringLength(100)] string Name,
+    [Range(0, 9999)] int DisplayOrder);
 public sealed record SchedulePresetRule(string Code, string Name, int DisplayOrder, string ReportingPeriod, string FinalDeadline,
     int MonthsPerPeriod, string PeriodEndDays, int DeadlineMonthOffset, int? FixedDeadlineDay);
 public sealed record SchedulePresetItem(Guid Id, string RuleCode, string Name, int Version, int DisplayOrder, string ReportingPeriod, string FinalDeadline,
@@ -34,7 +42,8 @@ public sealed record CreateReportRequest(
     string Frequency, TimeOnly? DueTime = null, int ComponentDeadlineOffsetDays = 1,
     Guid? SubmittingDivisionId = null, Guid? PrimarySubmittingOfficerId = null, Guid? DeputySubmittingOfficerId = null,
     Guid? ReceivingDivisionId = null, [MaxLength(100)] IReadOnlyList<ReportComponentRequest>? Components = null,
-    Guid? SubmissionRecipientId = null, [MaxLength(20)] IReadOnlyList<Guid>? SubmissionDepartmentIds = null);
+    Guid? SubmissionRecipientId = null, [MaxLength(20)] IReadOnlyList<Guid>? SubmissionDepartmentIds = null,
+    [Range(1, 2)] int ReportTypeId = 2);
 public sealed record ReportComponentRequest(
     [Required, StringLength(250)] string Name, [StringLength(1000)] string? Description,
     Guid ProviderDivisionId, Guid PrimaryOfficerId, Guid? DeputyOfficerId,
@@ -43,6 +52,7 @@ public sealed record ReportComponentRequest(
 public sealed record ComponentContributorItem(Guid UserId, string Role);
 public sealed record SetComponentContributorsRequest([Required, MaxLength(200)] IReadOnlyList<ComponentContributorItem> Contributors);
 public sealed record ReportItem(Guid Id, string Code, string Name, Guid OwnerDivisionId, string BbRecipient, string Frequency, int CycleCount,
+    int ReportTypeId = 2, string ReportTypeName = "None RIT",
     Guid? SubmittingDivisionId = null, Guid? PrimarySubmittingOfficerId = null, Guid? DeputySubmittingOfficerId = null, Guid? ReceivingDivisionId = null,
     Guid? SubmissionRecipientId = null, IReadOnlyList<Guid>? SubmissionDepartmentIds = null, string? SubmissionDestination = null,
     TimeOnly? DueTime = null, int? ComponentDeadlineOffsetDays = null, string? TimeZoneId = null,

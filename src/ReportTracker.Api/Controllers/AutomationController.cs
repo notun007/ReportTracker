@@ -15,4 +15,18 @@ public sealed class AutomationController(ICycleGenerationService generator, Trac
         await access.RequireAsync("administration.manage", null, null, ct);
         return Ok(await generator.GenerateAsync(through, ct));
     }
+
+    [HttpGet("yearly-cycles/preview")]
+    public async Task<ActionResult<YearlyCyclePreview>> PreviewYear([FromQuery] int year, CancellationToken ct)
+    {
+        await access.RequireAsync("administration.manage", null, null, ct);
+        return Ok(await generator.PreviewYearAsync(year, ct));
+    }
+
+    [HttpPost("yearly-cycles")]
+    public async Task<ActionResult<YearlyCycleGenerationResult>> GenerateYear([FromQuery] int year, CancellationToken ct)
+    {
+        await access.RequireAsync("administration.manage", null, null, ct);
+        return Ok(await generator.GenerateYearAsync(year, ct));
+    }
 }
