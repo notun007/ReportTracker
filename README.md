@@ -14,7 +14,7 @@ Reporting Tracker records internal handovers and final submissions to configured
 
 ## Configuration
 
-The existing local connection is stored in ASP.NET Core user secrets for this API project and loads automatically in Development. For another machine or deployment, configure its own secret or environment variable. Do not commit database passwords.
+Configure `ConnectionStrings:Oracle` in ASP.NET Core user secrets for this API project (loaded automatically in Development), or set `ConnectionStrings__Oracle` in the API process environment. A legacy `ConnectionStrings:ReportTracker` SQL Server secret is not used by the Oracle provider. A working connection in SQL Developer or SQL*Plus does not configure the API's connection. Do not commit database passwords.
 
 ```powershell
 $env:ConnectionStrings__Oracle = 'User Id=YOUR_SCHEMA;Password=YOUR_PASSWORD;Data Source=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=YOUR_HOST)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=YOUR_SERVICE)));Pooling=true;Connection Timeout=60;'
@@ -68,7 +68,7 @@ The first visit shows workspace setup. Create the coordinating division and init
 3. Use Components and Responsibilities to define mandatory inputs, preparing and receiving divisions, officers, evidence requirements and receipt-confirmation requirements.
 4. Create a reporting cycle with exactly one final BB obligation and any internal components that need tracking. Component deadlines cannot be later than the final deadline.
 5. Assigned officers record partial or full sending, including actual time, channel and reference. Actual times are entered in Bangladesh time and stored as UTC. Sending history preserves the actor and separate system-entry timestamp.
-6. Submission Readiness is derived from the linked components and their sending, evidence and receipt states. Refresh or sign in again to see persisted records. There is no demo-data fallback.
+6. Submission Readiness is derived from all required linked components and their sending, evidence and receipt states, including components prepared by other divisions. Main Report Submission keeps every authorized period visible and lists pending component statuses. Its submission action stays disabled until all required components are sent, required receipts are confirmed and required evidence is verified; the API also enforces this rule. Optional, cancelled and not-applicable components do not block submission. Refresh or sign in again to see persisted records. There is no demo-data fallback.
 
 Submission controls show actions for the current user's responsibility. Sending officers (or explicitly scoped recording delegates) upload confirmation evidence. A coordinator with `reports.manage` for that report reviews another officer's evidence; uploaders cannot verify their own proof. Internal receipt confirmation belongs to active officers in the task's receiving division and excludes its assigned senders and officers who recorded its sending events. Those receiving officers can read the incoming task and its history without gaining sending, upload or amendment access. For final BB tasks, a separate report coordinator records the actual BB acknowledgment. Receipt time cannot precede sending time.
 

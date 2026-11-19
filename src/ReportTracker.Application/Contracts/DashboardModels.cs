@@ -30,7 +30,10 @@ public sealed record ObligationListItemDto(
     int CompletedComponentCount,
     bool IsReadyForSubmission,
     Guid DivisionId,
-    string Division);
+    string Division,
+    IReadOnlyList<PendingComponentDto> PendingComponents);
+
+public sealed record PendingComponentDto(Guid Id, string Name, string SendingStatus, string ReceiptStatus, string EvidenceStatus);
 
 public sealed record StatusCountDto(string Status, int Count);
 

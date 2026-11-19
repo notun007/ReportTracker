@@ -203,6 +203,79 @@ public sealed class TrackingWorkflowTests
         Assert.Equal(1, mainRow.CompletedComponentCount);
     }
 
+    [Theory]
+    [InlineData(SendingStatus.NotSent, ReceiptStatus.AwaitingConfirmation, EvidenceStatus.Missing)]
+    [InlineData(SendingStatus.PartiallySent, ReceiptStatus.ReceiptConfirmed, EvidenceStatus.Verified)]
+    [InlineData(SendingStatus.Sent, ReceiptStatus.AwaitingConfirmation, EvidenceStatus.Verified)]
+    [InlineData(SendingStatus.Sent, ReceiptStatus.ReceiptDisputed, EvidenceStatus.Verified)]
+    [InlineData(SendingStatus.Sent, ReceiptStatus.ReceiptConfirmed, EvidenceStatus.Provided)]
+    [InlineData(SendingStatus.Sent, ReceiptStatus.ReceiptConfirmed, EvidenceStatus.Rejected)]
+    public async Task Pending_components_from_another_division_keep_period_visible_and_block_final_submission(
+        SendingStatus sending, ReceiptStatus receipt, EvidenceStatus evidence)
+    {
+        var actor = Guid.NewGuid();
+        await using var provider = Provider(actor);
+        var db = provider.GetRequiredService<ReportTrackerDbContext>();
+        var main = Seed(db, actor);
+        var component = Seed(db, Guid.NewGuid());
+        component.Type = ObligationType.Internal;
+        component.Name = "Finance input";
+        component.ReportCycle = main.ReportCycle;
+        component.ReportCycleId = main.ReportCycleId;
+        component.ParentObligationId = main.Id;
+        component.SendingStatus = sending;
+        component.ReceiptStatus = receipt;
+        component.EvidenceStatus = evidence;
+        await db.SaveChangesAsync();
+        var service = provider.GetRequiredService<ITrackingService>();
+
+        var row = Assert.Single((await service.GetDashboardAsync(default)).Upcoming);
+        Assert.Equal(main.Id, row.Id);
+        Assert.False(row.IsReadyForSubmission);
+        Assert.False(row.CanRecordSending);
+        Assert.Equal(1, row.RequiredComponentCount);
+        Assert.Equal(component.Id, Assert.Single(row.PendingComponents).Id);
+        Assert.False((await service.GetObligationAsync(main.Id, default))!.IsReadyForSubmission);
+        await Assert.ThrowsAsync<TrackingConflictException>(() => service.RecordSendingAsync(main.Id, Command(rowVersion: main.RowVersion), default));
+        Assert.Empty(db.SendingEvents);
+        Assert.Empty(db.AuditEvents);
+
+        component.SendingStatus = SendingStatus.Sent;
+        component.ReceiptStatus = ReceiptStatus.ReceiptConfirmed;
+        component.EvidenceStatus = EvidenceStatus.Verified;
+        await db.SaveChangesAsync();
+        row = Assert.Single((await service.GetDashboardAsync(default)).Upcoming);
+        Assert.True(row.IsReadyForSubmission);
+        Assert.True(row.CanRecordSending);
+        Assert.Empty(row.PendingComponents);
+        Assert.True(await service.RecordSendingAsync(main.Id, Command(rowVersion: main.RowVersion), default));
+        Assert.Equal(0, (await service.GetDashboardAsync(default)).ReadyForSubmission);
+    }
+
+    [Fact]
+    public async Task Optional_and_cancelled_components_do_not_block_final_submission()
+    {
+        var actor = Guid.NewGuid();
+        await using var provider = Provider(actor);
+        var db = provider.GetRequiredService<ReportTrackerDbContext>();
+        var main = Seed(db, actor);
+        foreach (var required in new[] { false, true })
+            db.Add(new TrackingObligation
+            {
+                Name = "Excluded component", Recipient = "Main sender", Type = ObligationType.Internal, ReportCycle = main.ReportCycle,
+                ReportCycleId = main.ReportCycleId, ParentObligationId = main.Id,
+                AccountableDivisionId = main.AccountableDivisionId, IsRequired = required,
+                ExceptionStatus = required ? ExceptionStatus.Cancelled : ExceptionStatus.None
+            });
+        await db.SaveChangesAsync();
+        var service = provider.GetRequiredService<ITrackingService>();
+        var row = (await service.GetDashboardAsync(default)).Upcoming.Single(x => x.Id == main.Id);
+        Assert.Equal(0, row.RequiredComponentCount);
+        Assert.True(row.IsReadyForSubmission);
+        Assert.True(row.CanRecordSending);
+        Assert.True(await service.RecordSendingAsync(main.Id, Command(rowVersion: main.RowVersion), default));
+    }
+
     [Fact]
     public void Reporting_frequency_supports_biweekly_cycles()
     {

@@ -139,7 +139,7 @@ public sealed class ReadinessController(ReportTrackerDbContext db, TrackingAcces
         var completed = components.Count(x => x.IsRequired && Complete(x));
         return Ok(new SubmissionReadinessDto(cycleId, main.Id, main.ReportCycle.ReportDefinition.Name, main.ReportCycle.PeriodLabel,
             DateTime.SpecifyKind(main.EffectiveDueAtUtc, DateTimeKind.Utc), required, completed, required - completed,
-            components.Count > 0 && completed == required, rows));
+            completed == required, rows));
     }
 
     private static bool Complete(TrackingObligation x) =>
