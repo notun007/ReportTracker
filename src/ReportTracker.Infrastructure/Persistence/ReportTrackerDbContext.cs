@@ -95,6 +95,8 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
         modelBuilder.Entity<SchedulePreset>().Property(x => x.WeeklyStartDays).HasMaxLength(35);
         modelBuilder.Entity<SchedulePreset>().HasIndex(x => new { x.RuleCode, x.Version }).IsUnique();
         modelBuilder.Entity<ReportCycle>().HasIndex(x => new { x.ReportDefinitionId, x.PeriodKey }).IsUnique();
+        modelBuilder.Entity<ReportCycle>().HasIndex(x => new { x.ReportDefinitionId, x.PeriodStart }).IsUnique();
+        modelBuilder.Entity<ReportCycle>().HasIndex(x => new { x.ReportDefinitionId, x.PeriodEnd }).IsUnique();
         modelBuilder.Entity<ChannelRequirement>().HasIndex(x => new { x.TrackingObligationId, x.Channel }).IsUnique();
         modelBuilder.Entity<AppRole>().HasIndex(x => x.Name).IsUnique();
         modelBuilder.Entity<Permission>().HasIndex(x => x.Code).IsUnique();

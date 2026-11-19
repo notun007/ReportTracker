@@ -43,10 +43,14 @@ public sealed record DivisionPerformanceItem(string Division, int Total, int Sen
 public sealed record ManagementAnalyticsDto(int Total, int Submitted, int Overdue, int ReportsAtRisk,
     int PendingExtensions, int FailedNotifications, decimal OnTimeRate, IReadOnlyList<DivisionPerformanceItem> Divisions);
 public sealed record GenerationResult(int ReportsEvaluated, int CyclesCreated, int ComponentsCreated, IReadOnlyList<string> Warnings);
+public sealed record ComponentDeadlinePlanItem(Guid ComponentId, string ComponentName, DateOnly Deadline);
 public sealed record YearlyCyclePlanItem(Guid ReportId, string ReportCode, string ReportName, string Frequency,
-    string PeriodKey, string PeriodLabel, DateOnly PeriodStart, DateOnly PeriodEnd, string Status, string? Reason = null);
+    string PeriodKey, string PeriodLabel, DateOnly PeriodStart, DateOnly PeriodEnd, string Status, string? Reason = null,
+    DateOnly? FinalDeadline = null, DateOnly? DefaultComponentDeadline = null,
+    IReadOnlyList<ComponentDeadlinePlanItem>? ComponentDeadlines = null);
 public sealed record YearlyCyclePreview(int Year, int ReportsEvaluated, int TotalCycles, int NewCycles, int ExistingCycles,
     int SkippedCycles, IReadOnlyList<YearlyCyclePlanItem> Items);
+public sealed record GenerateYearlyCyclesRequest(Guid? ReportId, IReadOnlyList<string>? PeriodKeys = null);
 public sealed record YearlyCycleGenerationResult(int Year, int ReportsEvaluated, int CyclesCreated, int ExistingCycles,
     int SkippedCycles, int ComponentsCreated, IReadOnlyList<string> Warnings);
 

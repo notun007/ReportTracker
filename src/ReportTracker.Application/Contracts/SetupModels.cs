@@ -43,7 +43,8 @@ public sealed record CreateReportRequest(
     Guid? SubmittingDivisionId = null, Guid? PrimarySubmittingOfficerId = null, Guid? DeputySubmittingOfficerId = null,
     Guid? ReceivingDivisionId = null, [MaxLength(100)] IReadOnlyList<ReportComponentRequest>? Components = null,
     Guid? SubmissionRecipientId = null, [MaxLength(20)] IReadOnlyList<Guid>? SubmissionDepartmentIds = null,
-    [Range(1, 2)] int ReportTypeId = 2);
+    [Range(1, 2)] int ReportTypeId = 2,
+    [Range(0, 365)] int ReportDeadlineOffsetDays = 0);
 public sealed record ReportComponentRequest(
     [Required, StringLength(250)] string Name, [StringLength(1000)] string? Description,
     Guid ProviderDivisionId, Guid PrimaryOfficerId, Guid? DeputyOfficerId,
@@ -56,7 +57,7 @@ public sealed record ReportItem(Guid Id, string Code, string Name, Guid OwnerDiv
     Guid? SubmittingDivisionId = null, Guid? PrimarySubmittingOfficerId = null, Guid? DeputySubmittingOfficerId = null, Guid? ReceivingDivisionId = null,
     Guid? SubmissionRecipientId = null, IReadOnlyList<Guid>? SubmissionDepartmentIds = null, string? SubmissionDestination = null,
     TimeOnly? DueTime = null, int? ComponentDeadlineOffsetDays = null, string? TimeZoneId = null,
-    string? InstructionReference = null, string? Description = null);
+    string? InstructionReference = null, string? Description = null, int ReportDeadlineOffsetDays = 0);
 public sealed record SubmissionRecipientItem(Guid Id, string Name, IReadOnlyList<LookupItem> Departments);
 public sealed record CreateSubmissionRecipientRequest([Required, StringLength(250)] string Name);
 public sealed record CreateSubmissionDepartmentRequest([Required, StringLength(150)] string Name);
@@ -66,7 +67,8 @@ public sealed record ReportResponsibilitiesRequest(Guid CoordinatingDivisionId, 
 public sealed record CreateCycleRequest(
     [Required, StringLength(80)] string PeriodKey, [Required, StringLength(150)] string PeriodLabel,
     DateOnly PeriodStart, DateOnly PeriodEnd,
-    [Required, MinLength(1), MaxLength(100)] IReadOnlyList<CreateObligationRequest> Obligations);
+    [Required, MinLength(1), MaxLength(100)] IReadOnlyList<CreateObligationRequest> Obligations,
+    [Range(2000, 9998)] int? ReportingYear = null);
 public sealed record ReportingCycleItem(Guid Id, string PeriodKey, string PeriodLabel, DateOnly PeriodStart, DateOnly PeriodEnd,
     IReadOnlyList<CycleObligationItem> Obligations);
 public sealed record CycleObligationItem(string Name, string Type, Guid DivisionId, string DivisionName,

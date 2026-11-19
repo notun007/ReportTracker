@@ -41,9 +41,14 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
                 RecipientName = x.SubmissionRecipient != null ? x.SubmissionRecipient.Name : x.BbRecipient,
                 Departments = x.SubmissionDepartments.Select(d => new { d.DepartmentId, d.Department.Name }).ToList(),
                 Version = x.Versions.OrderByDescending(v => v.VersionNumber)
-                    .Select(v => new { v.Frequency, v.DueTime, v.ComponentDeadlineOffsetDays, v.TimeZoneId }).FirstOrDefault(),
+                    .Select(v => new { v.Id, v.Frequency, v.DueTime, v.ComponentDeadlineOffsetDays, v.TimeZoneId }).FirstOrDefault(),
                 CycleCount = db.ReportCycles.Count(c => c.ReportDefinitionId == x.Id)
             }).ToListAsync(ct);
+        var versionIds = reports.Where(x => x.Version is not null).Select(x => x.Version!.Id).ToArray();
+        var deadlineRules = await db.ScheduleRules.AsNoTracking().Where(x => versionIds.Contains(x.DefinitionVersionId))
+            .OrderByDescending(x => x.CreatedAtUtc).ToListAsync(ct);
+        var deadlineOffsets = deadlineRules.GroupBy(x => x.DefinitionVersionId)
+            .ToDictionary(x => x.Key, x => x.First().OffsetDays ?? 0);
         var ids = reports.Select(x => x.Id).ToArray();
         var now = DateTime.UtcNow;
         var assignments = await db.ResponsibilityAssignments.AsNoTracking().Where(x => ids.Contains(x.ReportDefinitionId) && x.ResponsibilityType == "MainSender" &&
@@ -55,7 +60,8 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
                 x.SubmissionRecipientId, x.Departments.Select(d => d.DepartmentId).ToArray(),
                 ReportDefinition.FormatSubmissionDestination(x.RecipientName, x.Departments.Select(d => d.Name)),
                 x.Version?.DueTime, x.Version?.ComponentDeadlineOffsetDays, x.Version?.TimeZoneId,
-                x.InstructionReference, x.Description); }));
+                x.InstructionReference, x.Description,
+                x.Version is null ? 0 : deadlineOffsets.GetValueOrDefault(x.Version.Id)); }));
     }
 
     [HttpPost("reports")]
@@ -72,6 +78,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         await ValidateResponsibilities(new ReportResponsibilitiesRequest(request.OwnerDivisionId, request.SubmittingDivisionId ?? Guid.Empty,
             request.PrimarySubmittingOfficerId ?? Guid.Empty, request.DeputySubmittingOfficerId), ct);
         if (!Enum.TryParse<Frequency>(request.Frequency, out var frequency) || !Enum.IsDefined(frequency)) throw new TrackingValidationException("Choose a valid reporting frequency.");
+        if (request.ReportDeadlineOffsetDays is < 0 or > 365) throw new TrackingValidationException("Report deadline days must be between 0 and 365 calendar days after period end.");
         if (request.ComponentDeadlineOffsetDays is < 0 or > 365) throw new TrackingValidationException("Deadline lead days must be between 0 and 365 days.");
         if (!request.ReceivingDivisionId.HasValue || !await db.Divisions.AnyAsync(x => x.Id == request.ReceivingDivisionId && x.IsActive, ct))
             throw new TrackingValidationException("Choose an active receiving division for the report's components.");
@@ -103,6 +110,14 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
             ComponentDeadlineOffsetDays = request.ComponentDeadlineOffsetDays, TimeZoneId = "Asia/Dhaka" };
         report.Versions.Add(version);
         db.ReportDefinitions.Add(report);
+        db.ScheduleRules.Add(new ScheduleRule
+        {
+            DefinitionVersionId = version.Id,
+            PeriodConvention = "PeriodEndPlusCalendarDays",
+            OffsetDays = request.ReportDeadlineOffsetDays,
+            UsesBusinessDays = false,
+            HolidayAdjustmentAuthorized = false
+        });
         foreach (var item in components)
         {
             var component = new ComponentDefinition { DefinitionVersionId = version.Id, Name = item.Name.Trim(), Description = item.Description?.Trim(),
@@ -116,7 +131,8 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         db.ResponsibilityAssignments.Add(new ResponsibilityAssignment { ReportDefinitionId = report.Id, DivisionId = request.SubmittingDivisionId!.Value,
             PrimaryOfficerId = request.PrimarySubmittingOfficerId!.Value, DeputyOfficerId = request.DeputySubmittingOfficerId,
             ResponsibilityType = "MainSender", EffectiveFromUtc = DateTime.UtcNow });
-        Audit(nameof(ReportDefinition), report.Id, "ReportCreated", new { report.Code, report.Name, report.SubmissionRecipientId, request.SubmissionDepartmentIds });
+        Audit(nameof(ReportDefinition), report.Id, "ReportCreated", new { report.Code, report.Name, report.SubmissionRecipientId,
+            request.SubmissionDepartmentIds, request.ReportDeadlineOffsetDays, request.ComponentDeadlineOffsetDays });
         await db.SaveChangesAsync(ct);
         return Created($"/api/setup/reports/{report.Id}", new { report.Id });
     }
@@ -224,9 +240,26 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         if (report is null) return NotFound();
         await access.RequireAsync("reports.manage", report.OwnerDivisionId, reportId, ct);
         if (request.PeriodStart == default || request.PeriodEnd < request.PeriodStart) throw new TrackingValidationException("Enter a valid reporting period.");
+        var reportingYear = request.ReportingYear ?? request.PeriodStart.Year;
+        if (reportingYear is < 2000 or > 9998 || request.PeriodStart.Year != reportingYear || request.PeriodEnd.Year != reportingYear)
+            throw new TrackingValidationException("Period start and period end must both be within the selected reporting year.");
+        var periodKey = request.PeriodKey.Trim();
+        if (string.IsNullOrWhiteSpace(periodKey)) throw new TrackingValidationException("Enter a reporting period key.");
+        var conflicts = await db.ReportCycles.AsNoTracking().Where(x => x.ReportDefinitionId == reportId &&
+                (x.PeriodKey == periodKey || x.PeriodStart == request.PeriodStart || x.PeriodEnd == request.PeriodEnd ||
+                 (request.PeriodStart <= x.PeriodEnd && request.PeriodEnd >= x.PeriodStart)))
+            .Select(x => new { x.PeriodKey, x.PeriodLabel, x.PeriodStart, x.PeriodEnd }).ToListAsync(ct);
+        if (conflicts.Any(x => x.PeriodKey == periodKey))
+            throw new TrackingConflictException("This reporting cycle already exists for the selected report and period.");
+        if (conflicts.Any(x => x.PeriodStart == request.PeriodStart))
+            throw new TrackingConflictException("A reporting cycle for this report already starts on the selected date.");
+        if (conflicts.Any(x => x.PeriodEnd == request.PeriodEnd))
+            throw new TrackingConflictException("A reporting cycle for this report already ends on the selected date.");
+        if (conflicts.FirstOrDefault() is { } overlap)
+            throw new TrackingConflictException($"The selected reporting period overlaps {overlap.PeriodLabel} ({overlap.PeriodStart:yyyy-MM-dd} to {overlap.PeriodEnd:yyyy-MM-dd}).");
         if (!request.Obligations.Any(x => x.Type == "BB")) throw new TrackingValidationException("Include at least one final submission obligation.");
         var version = report.Versions.OrderByDescending(x => x.VersionNumber).First();
-        var cycle = new ReportCycle { ReportDefinitionId = reportId, DefinitionVersionId = version.Id, PeriodKey = request.PeriodKey.Trim(),
+        var cycle = new ReportCycle { ReportDefinitionId = reportId, DefinitionVersionId = version.Id, PeriodKey = periodKey,
             PeriodLabel = request.PeriodLabel.Trim(), PeriodStart = request.PeriodStart, PeriodEnd = request.PeriodEnd };
         if (request.Obligations.Count(x => x.Type == "BB") != 1)
             throw new TrackingValidationException("Include exactly one final submission obligation.");
@@ -266,8 +299,29 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         foreach (var component in obligations.Where(x => x.Type == ObligationType.Internal)) component.ParentObligationId = main.Id;
         db.ReportCycles.Add(cycle);
         Audit(nameof(ReportCycle), cycle.Id, "CycleCreated", new { reportId, cycle.PeriodKey, ObligationCount = cycle.Obligations.Count });
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException exception) when (CycleUniqueConstraint(exception))
+        {
+            return Conflict(CycleConflictProblem(exception));
+        }
         return Created($"/api/setup/reports/{reportId}/cycles/{cycle.Id}", new { cycle.Id });
+    }
+
+    private static bool CycleUniqueConstraint(DbUpdateException exception) =>
+        exception.InnerException?.Message.Contains("uq_rt_report_cycles_report_definition_id_period_", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static ProblemDetails CycleConflictProblem(DbUpdateException exception)
+    {
+        var message = exception.InnerException?.Message ?? string.Empty;
+        var detail = message.Contains("period_start", StringComparison.OrdinalIgnoreCase)
+            ? "A reporting cycle for this report already starts on the selected date."
+            : message.Contains("period_end", StringComparison.OrdinalIgnoreCase)
+                ? "A reporting cycle for this report already ends on the selected date."
+                : "This reporting cycle already exists for the selected report and period.";
+        return new ProblemDetails { Status = StatusCodes.Status409Conflict, Title = "The reporting cycle conflicts with an existing cycle.", Detail = detail };
     }
 
     [HttpGet("users")]

@@ -25,10 +25,27 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         {
             Status = status,
             Title = status switch { 409 => "The record changed or conflicts with an existing record.", 400 => "Please check your input.", 403 => "Access denied.", _ => "An unexpected error occurred." },
-            Detail = status == 500 ? null : exception is DbUpdateConcurrencyException ? "Refresh the record and try again." :
-                exception is DbUpdateException ? "A record with this code, email, employee ID or period already exists." : exception.Message,
+            Detail = ProblemDetail(exception, status),
             Extensions = { ["traceId"] = context.TraceIdentifier }
         }, cancellationToken);
         return true;
+    }
+
+    private static string? ProblemDetail(Exception exception, int status)
+    {
+        if (status == 500) return null;
+        if (exception is DbUpdateConcurrencyException) return "Refresh the record and try again.";
+        if (exception is DbUpdateException { InnerException: OracleException { Number: 1 } oracle })
+        {
+            if (oracle.Message.Contains("uq_rt_report_cycles_report_definition_id_period_start", StringComparison.OrdinalIgnoreCase))
+                return "A reporting cycle for this report already starts on the selected date.";
+            if (oracle.Message.Contains("uq_rt_report_cycles_report_definition_id_period_end", StringComparison.OrdinalIgnoreCase))
+                return "A reporting cycle for this report already ends on the selected date.";
+            if (oracle.Message.Contains("uq_rt_report_cycles_report_definition_id_period_key", StringComparison.OrdinalIgnoreCase))
+                return "This reporting cycle already exists for the selected report and period.";
+            return "A record with the same unique information already exists.";
+        }
+        if (exception is DbUpdateException) return "The record could not be saved because it conflicts with a recent change. Refresh and try again.";
+        return exception.Message;
     }
 }

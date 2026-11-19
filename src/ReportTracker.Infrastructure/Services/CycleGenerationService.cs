@@ -14,14 +14,24 @@ namespace ReportTracker.Infrastructure.Services;
 
 internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycleGenerationService
 {
-    public async Task<YearlyCyclePreview> PreviewYearAsync(int year, CancellationToken ct)
+    public async Task<YearlyCyclePreview> PreviewYearAsync(int year, Guid? reportId, CancellationToken ct)
     {
         ValidateYear(year);
-        var reports = await db.ReportDefinitions.AsNoTracking().Where(x => x.IsActive)
+        var reports = await db.ReportDefinitions.AsNoTracking().Where(x => x.IsActive && (!reportId.HasValue || x.Id == reportId.Value))
             .Include(x => x.Versions).OrderBy(x => x.Code).ToListAsync(ct);
+        var versionIds = reports.SelectMany(x => x.Versions).Select(x => x.Id).ToArray();
+        var savedSchedules = await db.ScheduleRules.AsNoTracking().Where(x => versionIds.Contains(x.DefinitionVersionId))
+            .OrderByDescending(x => x.CreatedAtUtc).ToListAsync(ct);
+        var schedules = savedSchedules.GroupBy(x => x.DefinitionVersionId).ToDictionary(x => x.Key, x => x.First());
+        var savedComponents = await db.ComponentDefinitions.AsNoTracking().Where(x => versionIds.Contains(x.DefinitionVersionId))
+            .OrderBy(x => x.Name).ThenBy(x => x.Id).ToListAsync(ct);
+        var components = savedComponents.GroupBy(x => x.DefinitionVersionId).ToDictionary(x => x.Key, x => x.ToArray());
         var presets = await db.SchedulePresets.AsNoTracking().OrderByDescending(x => x.Version).ToListAsync(ct);
-        var existing = await db.ReportCycles.AsNoTracking().Select(x => new { x.ReportDefinitionId, x.PeriodKey }).ToListAsync(ct);
-        var existingKeys = existing.Select(x => $"{x.ReportDefinitionId:N}:{x.PeriodKey}").ToHashSet();
+        var reportIds = reports.Select(x => x.Id).ToArray();
+        var existing = await db.ReportCycles.AsNoTracking().Where(x => reportIds.Contains(x.ReportDefinitionId))
+            .Include(x => x.Obligations).ToListAsync(ct);
+        var existingCycles = existing.GroupBy(x => $"{x.ReportDefinitionId:N}:{x.PeriodKey}")
+            .ToDictionary(x => x.Key, x => x.First());
         var items = new List<YearlyCyclePlanItem>();
 
         foreach (var report in reports)
@@ -44,19 +54,35 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             var preset = presets.FirstOrDefault(x => x.RuleCode == ruleCode);
             foreach (var period in PeriodsForYear(version.Frequency, year, preset))
             {
-                var status = existingKeys.Contains($"{report.Id:N}:{period.Key}") ? "Existing" : "New";
+                var key = $"{report.Id:N}:{period.Key}";
+                var status = existingCycles.TryGetValue(key, out var existingCycle) ? "Existing" : "New";
+                var savedMain = existingCycle?.Obligations.FirstOrDefault(x => x.Type == ObligationType.External);
+                var finalDeadline = savedMain is null
+                    ? DeadlineDate(period.End, schedules.GetValueOrDefault(version.Id))
+                    : DhakaDate(savedMain.OriginalDueAtUtc);
+                var defaultComponentDeadline = finalDeadline.AddDays(-version.ComponentDeadlineOffsetDays);
+                var componentDeadlines = existingCycle is null
+                    ? components.GetValueOrDefault(version.Id, [])
+                        .Select(component => new ComponentDeadlinePlanItem(component.Id, component.Name,
+                            finalDeadline.AddDays(-ComponentLeadDays(component, version.ComponentDeadlineOffsetDays))))
+                        .ToArray()
+                    : existingCycle.Obligations.Where(x => x.Type == ObligationType.Internal).OrderBy(x => x.Name)
+                        .Select(component => new ComponentDeadlinePlanItem(component.Id, component.Name, DhakaDate(component.OriginalDueAtUtc)))
+                        .ToArray();
                 items.Add(new(report.Id, report.Code, report.Name, version.Frequency.ToString(), period.Key, period.Label,
-                    period.Start, period.End, status));
+                    period.Start, period.End, status, null, finalDeadline, defaultComponentDeadline, componentDeadlines));
             }
         }
         return new(year, reports.Count, items.Count(x => x.Status != "Skipped"), items.Count(x => x.Status == "New"),
             items.Count(x => x.Status == "Existing"), items.Count(x => x.Status == "Skipped"), items);
     }
 
-    public async Task<YearlyCycleGenerationResult> GenerateYearAsync(int year, CancellationToken ct)
+    public async Task<YearlyCycleGenerationResult> GenerateYearAsync(int year, Guid? reportId,
+        IReadOnlyCollection<string>? periodKeys, CancellationToken ct)
     {
-        var preview = await PreviewYearAsync(year, ct);
-        var planned = preview.Items.Where(x => x.Status == "New").ToList();
+        var preview = await PreviewYearAsync(year, reportId, ct);
+        var selectedKeys = periodKeys?.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var planned = preview.Items.Where(x => x.Status == "New" && (selectedKeys is null || selectedKeys.Contains(x.PeriodKey))).ToList();
         var reportIds = planned.Select(x => x.ReportId).Distinct().ToArray();
         var reports = await db.ReportDefinitions.Where(x => reportIds.Contains(x.Id)).Include(x => x.Versions)
             .Include(x => x.SubmissionRecipient).Include(x => x.SubmissionDepartments).ThenInclude(x => x.Department)
@@ -89,7 +115,8 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             {
                 warnings.Add($"{report.Code} / {item.PeriodKey}: complete component responsibilities before generating this cycle."); skipped++; continue;
             }
-            var localDue = DateTime.SpecifyKind(item.PeriodEnd.ToDateTime(version.DueTime), DateTimeKind.Unspecified);
+            var dueDate = item.FinalDeadline ?? item.PeriodEnd;
+            var localDue = DateTime.SpecifyKind(dueDate.ToDateTime(version.DueTime), DateTimeKind.Unspecified);
             var dueUtc = TimeZoneInfo.ConvertTimeToUtc(localDue, TrackingRules.Dhaka);
             var cycle = new ReportCycle { ReportDefinitionId = report.Id, DefinitionVersionId = version.Id, PeriodKey = item.PeriodKey,
                 PeriodLabel = item.PeriodLabel, PeriodStart = item.PeriodStart, PeriodEnd = item.PeriodEnd };
@@ -101,12 +128,14 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             cycle.Obligations.Add(main);
             foreach (var component in components)
             {
+                var leadDays = ComponentLeadDays(component, version.ComponentDeadlineOffsetDays);
+                var componentDueUtc = dueUtc.AddDays(-leadDays);
                 cycle.Obligations.Add(new TrackingObligation { ReportCycleId = cycle.Id, ParentObligationId = main.Id, Type = ObligationType.Internal,
                     Name = component.Name, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
                     DeputyOfficerId = component.DeputyOfficerId, ReceivingDivisionId = report.ReceivingDivisionId ?? component.ReceivingDivisionId,
                     ContributorsJson = component.ContributorsJson ?? JsonSerializer.Serialize(ComponentValidation.Contributors(null, component.PrimaryOfficerId, component.DeputyOfficerId)),
-                    Recipient = (report.ReceivingDivisionId ?? component.ReceivingDivisionId).ToString(), OriginalDueAtUtc = dueUtc,
-                    EffectiveDueAtUtc = dueUtc, ReceiptStatus = ReceiptStatus.NotRequired, EvidenceStatus = EvidenceStatus.NotRequired });
+                    Recipient = (report.ReceivingDivisionId ?? component.ReceivingDivisionId).ToString(), OriginalDueAtUtc = componentDueUtc,
+                    EffectiveDueAtUtc = componentDueUtc, ReceiptStatus = ReceiptStatus.NotRequired, EvidenceStatus = EvidenceStatus.NotRequired });
                 componentsCreated++;
             }
             db.ReportCycles.Add(cycle);
@@ -125,6 +154,10 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
         var reports = await db.ReportDefinitions.Where(x => x.IsActive).Include(x => x.Versions).Include(x => x.SubmissionRecipient)
             .Include(x => x.SubmissionDepartments).ThenInclude(x => x.Department).AsSplitQuery().ToListAsync(ct);
         var reportIds = reports.Select(x => x.Id).ToArray();
+        var versionIds = reports.SelectMany(x => x.Versions).Select(x => x.Id).ToArray();
+        var savedSchedules = await db.ScheduleRules.AsNoTracking().Where(x => versionIds.Contains(x.DefinitionVersionId))
+            .OrderByDescending(x => x.CreatedAtUtc).ToListAsync(ct);
+        var schedules = savedSchedules.GroupBy(x => x.DefinitionVersionId).ToDictionary(x => x.Key, x => x.First());
         var assignments = await db.ResponsibilityAssignments.Where(x => reportIds.Contains(x.ReportDefinitionId) && x.ResponsibilityType == "MainSender" &&
             x.EffectiveFromUtc <= DateTime.UtcNow && (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc >= DateTime.UtcNow)).ToListAsync(ct);
         var activeUsers = await db.Users.Where(x => x.IsActive).ToListAsync(ct);
@@ -157,10 +190,7 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             {
                 var key = $"{report.Id:N}:{period.Key}";
                 if (existingKeys.Contains(key)) continue;
-                var schedule = await db.ScheduleRules.AsNoTracking().FirstOrDefaultAsync(x => x.DefinitionVersionId == version.Id, ct);
-                var dueDate = schedule?.FixedDay is int fixedDay
-                    ? new DateOnly(period.End.Year, period.End.Month, Math.Min(fixedDay, DateTime.DaysInMonth(period.End.Year, period.End.Month)))
-                    : period.End.AddDays(schedule?.OffsetDays ?? 0);
+                var dueDate = DeadlineDate(period.End, schedules.GetValueOrDefault(version.Id));
                 var localDue = DateTime.SpecifyKind(dueDate.ToDateTime(version.DueTime), DateTimeKind.Unspecified);
                 var mainDueUtc = TimeZoneInfo.ConvertTimeToUtc(localDue, TrackingRules.Dhaka);
                 var cycle = new ReportCycle { ReportDefinitionId = report.Id, DefinitionVersionId = version.Id, PeriodKey = period.Key,
@@ -173,7 +203,7 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                 cycle.Obligations.Add(main);
                 foreach (var component in components)
                 {
-                    var leadDays = component.DeadlineRuleJson is null ? version.ComponentDeadlineOffsetDays : ParseOffset(component.DeadlineRuleJson, version.ComponentDeadlineOffsetDays);
+                    var leadDays = ComponentLeadDays(component, version.ComponentDeadlineOffsetDays);
                     var dueUtc = mainDueUtc.AddDays(-leadDays);
                     cycle.Obligations.Add(new TrackingObligation { ReportCycleId = cycle.Id, ParentObligationId = main.Id, Type = ObligationType.Internal,
                         Name = component.Name, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
@@ -199,6 +229,17 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
         try { using var document = JsonDocument.Parse(json); return document.RootElement.TryGetProperty("offsetDays", out var value) ? value.GetInt32() : fallback; }
         catch (JsonException) { return fallback; }
     }
+
+    private static int ComponentLeadDays(ComponentDefinition component, int fallback) =>
+        component.DeadlineRuleJson is null ? fallback : ParseOffset(component.DeadlineRuleJson, fallback);
+
+    private static DateOnly DeadlineDate(DateOnly periodEnd, ScheduleRule? schedule) =>
+        schedule?.FixedDay is int fixedDay
+            ? new DateOnly(periodEnd.Year, periodEnd.Month, Math.Min(fixedDay, DateTime.DaysInMonth(periodEnd.Year, periodEnd.Month)))
+            : periodEnd.AddDays(schedule?.OffsetDays ?? 0);
+
+    private static DateOnly DhakaDate(DateTime utc) => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(
+        utc.Kind == DateTimeKind.Utc ? utc : DateTime.SpecifyKind(utc, DateTimeKind.Utc), TrackingRules.Dhaka));
 
     private static void ValidateYear(int year)
     {

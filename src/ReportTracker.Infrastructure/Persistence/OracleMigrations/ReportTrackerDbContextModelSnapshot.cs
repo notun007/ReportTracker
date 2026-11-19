@@ -1359,9 +1359,17 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                     b.HasKey("Id")
                         .HasName("pk_rt_report_cycles_id");
 
+                    b.HasIndex("ReportDefinitionId", "PeriodEnd")
+                        .IsUnique()
+                        .HasDatabaseName("uq_rt_report_cycles_report_definition_id_period_end");
+
                     b.HasIndex("ReportDefinitionId", "PeriodKey")
                         .IsUnique()
                         .HasDatabaseName("uq_rt_report_cycles_report_definition_id_period_key");
+
+                    b.HasIndex("ReportDefinitionId", "PeriodStart")
+                        .IsUnique()
+                        .HasDatabaseName("uq_rt_report_cycles_report_definition_id_period_start");
 
                     b.ToTable("rt_report_cycles", (string)null);
                 });

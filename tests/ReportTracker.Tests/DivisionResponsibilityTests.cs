@@ -76,23 +76,71 @@ public sealed class DivisionResponsibilityTests
     public async Task Yearly_monthly_generation_creates_all_twelve_calendar_cycles_without_a_saved_preset()
     {
         using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); await Seed(db);
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); var f = await Seed(db);
         var generator = scope.ServiceProvider.GetRequiredService<ICycleGenerationService>();
         var year = Today().Year;
+        var version = await db.DefinitionVersions.SingleAsync(x => x.ReportDefinitionId == f.Report.Id);
+        version.ComponentDeadlineOffsetDays = 1;
+        db.ScheduleRules.Add(new ScheduleRule { DefinitionVersionId = version.Id, PeriodConvention = "PeriodEndPlusCalendarDays", OffsetDays = 2 });
+        await db.SaveChangesAsync();
 
-        var preview = await generator.PreviewYearAsync(year, default);
+        var preview = await generator.PreviewYearAsync(year, f.Report.Id, default);
 
         Assert.Equal(12, preview.TotalCycles);
         Assert.Equal(12, preview.NewCycles);
         Assert.Equal(0, preview.SkippedCycles);
         Assert.Equal(new DateOnly(year, 1, 1), preview.Items.First().PeriodStart);
         Assert.Equal(new DateOnly(year, 12, 31), preview.Items.Last().PeriodEnd);
+        Assert.Equal(new DateOnly(year, 2, 2), preview.Items.First().FinalDeadline);
+        Assert.Equal(new DateOnly(year, 2, 1), preview.Items.First().DefaultComponentDeadline);
+        Assert.Equal(2, preview.Items.First().ComponentDeadlines!.Count);
+        Assert.All(preview.Items.First().ComponentDeadlines!, component =>
+            Assert.Equal(new DateOnly(year, 2, 1), component.Deadline));
 
-        var result = await generator.GenerateYearAsync(year, default);
+        var selected = preview.Items.Take(3).Select(x => x.PeriodKey).ToArray();
+        var result = await generator.GenerateYearAsync(year, f.Report.Id, selected, default);
 
-        Assert.Equal(12, result.CyclesCreated);
-        Assert.Equal(12, await db.ReportCycles.CountAsync());
+        Assert.Equal(3, result.CyclesCreated);
+        Assert.Equal(3, await db.ReportCycles.CountAsync());
         Assert.Equal(0, result.SkippedCycles);
+        var january = await db.ReportCycles.Include(x => x.Obligations).SingleAsync(x => x.PeriodKey == $"{year}-01");
+        var main = Assert.Single(january.Obligations, x => x.Type == ObligationType.External);
+        Assert.Equal(new DateTime(year, 2, 2, 11, 0, 0, DateTimeKind.Utc), main.OriginalDueAtUtc);
+        Assert.All(january.Obligations.Where(x => x.Type == ObligationType.Internal),
+            component => Assert.Equal(main.OriginalDueAtUtc.AddDays(-1), component.OriginalDueAtUtc));
+
+        (await db.ScheduleRules.SingleAsync(x => x.DefinitionVersionId == version.Id)).OffsetDays = 5;
+        await db.SaveChangesAsync();
+
+        var remaining = await generator.PreviewYearAsync(year, f.Report.Id, default);
+        Assert.Equal(3, remaining.ExistingCycles);
+        Assert.Equal(9, remaining.NewCycles);
+        Assert.Equal(new DateOnly(year, 2, 2), remaining.Items.Single(x => x.PeriodKey == $"{year}-01").FinalDeadline);
+        Assert.Equal(new DateOnly(year, 5, 5), remaining.Items.Single(x => x.PeriodKey == $"{year}-04").FinalDeadline);
+        var completed = await generator.GenerateYearAsync(year, f.Report.Id,
+            remaining.Items.Where(x => x.Status == "New").Select(x => x.PeriodKey).ToArray(), default);
+        Assert.Equal(9, completed.CyclesCreated);
+        Assert.Equal(12, await db.ReportCycles.CountAsync());
+    }
+
+    [Fact]
+    public async Task Yearly_preview_always_shows_the_default_component_deadline_when_no_components_exist()
+    {
+        using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); var f = await Seed(db);
+        var version = await db.DefinitionVersions.SingleAsync(x => x.ReportDefinitionId == f.Report.Id);
+        version.ComponentDeadlineOffsetDays = 4;
+        db.ComponentDefinitions.RemoveRange(await db.ComponentDefinitions.Where(x => x.DefinitionVersionId == version.Id).ToListAsync());
+        db.ScheduleRules.Add(new ScheduleRule { DefinitionVersionId = version.Id, PeriodConvention = "PeriodEndPlusCalendarDays", OffsetDays = 10 });
+        await db.SaveChangesAsync();
+
+        var preview = await scope.ServiceProvider.GetRequiredService<ICycleGenerationService>()
+            .PreviewYearAsync(Today().Year, f.Report.Id, default);
+        var january = preview.Items.Single(x => x.PeriodKey == $"{Today().Year}-01");
+
+        Assert.Equal(new DateOnly(Today().Year, 2, 10), january.FinalDeadline);
+        Assert.Equal(new DateOnly(Today().Year, 2, 6), january.DefaultComponentDeadline);
+        Assert.Empty(january.ComponentDeadlines!);
     }
 
     [Theory]
@@ -115,12 +163,28 @@ public sealed class DivisionResponsibilityTests
         using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); var f = await Seed(db);
         var controller = Controller(db, f.Coordinator.Id);
-        CreateCycleRequest Request(Guid division, Guid officer) => new("manual", "Manual cycle", Today(), Today(),
-            [new CreateObligationRequest("BB", "BB", division, officer, null, "BB", DateTime.UtcNow.AddDays(1), false, true)]);
+        var year = Today().Year; var januaryStart = new DateOnly(year, 1, 1); var januaryEnd = new DateOnly(year, 1, 31);
+        CreateCycleRequest Request(Guid division, Guid officer, string key = "manual", DateOnly? start = null, DateOnly? end = null, int? reportingYear = null) =>
+            new(key, "Manual cycle", start ?? januaryStart, end ?? januaryEnd,
+                [new CreateObligationRequest("BB", "BB", division, officer, null, "BB", DateTime.UtcNow.AddDays(1), false, true)], reportingYear ?? year);
         await Assert.ThrowsAsync<TrackingValidationException>(() => controller.CreateCycle(f.Report.Id, Request(f.C.Id, f.Coordinator.Id), default));
         Assert.Empty(await db.ReportCycles.ToListAsync());
         Assert.IsType<CreatedResult>(await controller.CreateCycle(f.Report.Id, Request(f.D.Id, f.Submitter.Id), default));
         Assert.Equal(f.D.Id, (await db.TrackingObligations.SingleAsync()).AccountableDivisionId);
+        await Assert.ThrowsAsync<TrackingConflictException>(() =>
+            controller.CreateCycle(f.Report.Id, Request(f.D.Id, f.Submitter.Id), default));
+        var duplicateStart = await Assert.ThrowsAsync<TrackingConflictException>(() => controller.CreateCycle(f.Report.Id,
+            Request(f.D.Id, f.Submitter.Id, "manual-start", januaryStart, new DateOnly(year, 2, 1)), default));
+        Assert.Contains("starts", duplicateStart.Message);
+        var duplicateEnd = await Assert.ThrowsAsync<TrackingConflictException>(() => controller.CreateCycle(f.Report.Id,
+            Request(f.D.Id, f.Submitter.Id, "manual-end", new DateOnly(year, 1, 2), januaryEnd), default));
+        Assert.Contains("ends", duplicateEnd.Message);
+        var overlap = await Assert.ThrowsAsync<TrackingConflictException>(() => controller.CreateCycle(f.Report.Id,
+            Request(f.D.Id, f.Submitter.Id, "manual-overlap", new DateOnly(year, 1, 15), new DateOnly(year, 2, 15)), default));
+        Assert.Contains("overlaps", overlap.Message);
+        await Assert.ThrowsAsync<TrackingValidationException>(() => controller.CreateCycle(f.Report.Id,
+            Request(f.D.Id, f.Submitter.Id, "wrong-year", januaryStart, januaryEnd, year + 1), default));
+        Assert.Single(await db.ReportCycles.ToListAsync());
     }
 
     [Fact]
@@ -215,8 +279,9 @@ public sealed class DivisionResponsibilityTests
         var automatic = await db.TrackingObligations.SingleAsync(x => x.ReportCycle.ReportDefinitionId == report.Id);
         Assert.Equal(item.SubmissionDestination, automatic.Recipient);
         Assert.IsType<NoContentResult>(await controller.SetSubmissionDestination(report.Id, new(other.Id, [unrelated.Id]), default));
-        var manual = new CreateCycleRequest("new-destination", "New destination", Today(), Today(),
-            [new CreateObligationRequest("Final submission", "BB", f.D.Id, f.Submitter.Id, null, "Client value", DateTime.UtcNow.AddDays(1), false, true)]);
+        var manualDate = new DateOnly(Today().Year + 1, 1, 1);
+        var manual = new CreateCycleRequest("new-destination", "New destination", manualDate, manualDate,
+            [new CreateObligationRequest("Final submission", "BB", f.D.Id, f.Submitter.Id, null, "Client value", DateTime.UtcNow.AddDays(1), false, true)], manualDate.Year);
         Assert.IsType<CreatedResult>(await controller.CreateCycle(report.Id, manual, default));
         var saved = await db.TrackingObligations.SingleAsync(x => x.ReportCycle.PeriodKey == "new-destination");
         Assert.Equal("Other organization — Audit", saved.Recipient);

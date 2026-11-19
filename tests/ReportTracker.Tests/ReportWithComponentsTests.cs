@@ -27,6 +27,11 @@ public sealed class ReportWithComponentsTests
         Assert.Equal(f.A.Id, components[0].ProviderDivisionId); Assert.Equal(f.B.Id, components[1].ProviderDivisionId);
         Assert.All(components, c => Assert.Equal(version.ComponentDeadlineOffsetDays,
             JsonDocument.Parse(c.DeadlineRuleJson!).RootElement.GetProperty("offsetDays").GetInt32()));
+        var deadlineRule = await db.ScheduleRules.SingleAsync();
+        Assert.Equal(2, deadlineRule.OffsetDays);
+        Assert.Equal("PeriodEndPlusCalendarDays", deadlineRule.PeriodConvention);
+        Assert.False(deadlineRule.UsesBusinessDays);
+        Assert.False(deadlineRule.HolidayAdjustmentAuthorized);
 
         Assert.Single(await db.ResponsibilityAssignments.ToListAsync()); Assert.Equal(3, await db.AuditEvents.CountAsync());
     }
@@ -98,7 +103,7 @@ public sealed class ReportWithComponentsTests
     private static CreateReportRequest Request(Fixture f) => new("ATM", "Monthly ATM report", null, f.C.Id, "BB", null, "Monthly", new TimeOnly(17, 0), 1,
         f.D.Id, f.Submitter.Id, null, f.C.Id,
         [new("Component A", "ATM figures", f.A.Id, f.OfficerA.Id, null, 2),
-         new("Component B", null, f.B.Id, f.OfficerB.Id, null, 1)]);
+         new("Component B", null, f.B.Id, f.OfficerB.Id, null, 1)], ReportDeadlineOffsetDays: 2);
     private static async Task<Fixture> Seed(ReportTrackerDbContext db)
     {
         Division Division(string code) => new() { Code = code, Name = "Division " + code };
