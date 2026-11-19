@@ -218,7 +218,8 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         var obligations = cycles.SelectMany(x => x.Obligations).ToList();
         var officerIds = obligations.SelectMany(x => new[] { x.PrimaryOfficerId, x.DeputyOfficerId })
             .Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
-        var divisionIds = obligations.Select(x => x.AccountableDivisionId).Distinct().ToArray();
+        var divisionIds = obligations.SelectMany(x => new Guid?[] { x.AccountableDivisionId, x.ReceivingDivisionId })
+            .Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
         var officers = await db.Users.AsNoTracking().Where(x => officerIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.DisplayName, ct);
         var divisions = await db.Divisions.AsNoTracking().Where(x => divisionIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
         return Ok(cycles.Select(cycle => new ReportingCycleItem(cycle.Id, cycle.PeriodKey, cycle.PeriodLabel, cycle.PeriodStart, cycle.PeriodEnd,
@@ -226,7 +227,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
                 new CycleObligationItem(TrackingRules.ObligationDisplayName(x.Type, x.Name), x.Type == ObligationType.External ? "BB" : x.Type.ToString(),
                     x.AccountableDivisionId, divisions.GetValueOrDefault(x.AccountableDivisionId, "Unknown division"),
                     x.PrimaryOfficerId, officers.GetValueOrDefault(x.PrimaryOfficerId ?? Guid.Empty),
-                    x.DeputyOfficerId, officers.GetValueOrDefault(x.DeputyOfficerId ?? Guid.Empty), x.Recipient,
+                    x.DeputyOfficerId, officers.GetValueOrDefault(x.DeputyOfficerId ?? Guid.Empty), DisplayRecipient(x, divisions),
                     x.EffectiveDueAtUtc, x.ReceiptStatus != ReceiptStatus.NotRequired, x.EvidenceStatus != EvidenceStatus.NotRequired, x.ReceivingDivisionId,
                     x.Type == ObligationType.Internal ? ComponentValidation.Contributors(x.ContributorsJson, x.PrimaryOfficerId, x.DeputyOfficerId) : null)).ToList())).ToList());
     }
@@ -312,6 +313,14 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
 
     private static bool CycleUniqueConstraint(DbUpdateException exception) =>
         exception.InnerException?.Message.Contains("uq_rt_report_cycles_report_definition_id_period_", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string DisplayRecipient(TrackingObligation obligation, IReadOnlyDictionary<Guid, string> divisions)
+    {
+        if (obligation.Type != ObligationType.Internal) return obligation.Recipient;
+        var divisionId = obligation.ReceivingDivisionId;
+        if (!divisionId.HasValue && Guid.TryParse(obligation.Recipient, out var legacyDivisionId)) divisionId = legacyDivisionId;
+        return divisionId.HasValue ? divisions.GetValueOrDefault(divisionId.Value, obligation.Recipient) : obligation.Recipient;
+    }
 
     private static ProblemDetails CycleConflictProblem(DbUpdateException exception)
     {

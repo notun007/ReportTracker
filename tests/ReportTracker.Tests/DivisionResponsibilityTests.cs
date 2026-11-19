@@ -66,7 +66,7 @@ public sealed class DivisionResponsibilityTests
             Assert.Equal(f.D.Id, main.AccountableDivisionId); Assert.Equal(f.Submitter.Id, main.PrimaryOfficerId);
             var components = cycle.Obligations.Where(x => x.Type == ObligationType.Internal).ToList();
             Assert.Equal(new[] { f.A.Id, f.B.Id }.Order(), components.Select(x => x.AccountableDivisionId).Order());
-            Assert.All(components, x => { Assert.Equal(f.C.Id, x.ReceivingDivisionId); Assert.Equal(main.Id, x.ParentObligationId); });
+            Assert.All(components, x => { Assert.Equal(f.C.Id, x.ReceivingDivisionId); Assert.Equal(f.C.Name, x.Recipient); Assert.Equal(main.Id, x.ParentObligationId); });
         }
         Assert.Equal(f.C.Id, f.Report.OwnerDivisionId);
         Assert.Equal(0, (await generator.GenerateAsync(Today().AddDays(60), default)).CyclesCreated);

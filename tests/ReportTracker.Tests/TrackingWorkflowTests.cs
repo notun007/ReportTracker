@@ -95,6 +95,28 @@ public sealed class TrackingWorkflowTests
     }
 
     [Fact]
+    public async Task Component_recipient_displays_the_receiving_division_name_for_legacy_guid_values()
+    {
+        var actor = Guid.NewGuid();
+        await using var provider = Provider(actor);
+        var db = provider.GetRequiredService<ReportTrackerDbContext>();
+        var component = Seed(db, actor);
+        var receiving = new Division { Code = "RCV", Name = "Information Security Division" };
+        component.Type = ObligationType.Internal;
+        component.ReceivingDivisionId = receiving.Id;
+        component.Recipient = receiving.Id.ToString();
+        db.Add(receiving);
+        await db.SaveChangesAsync();
+
+        var service = provider.GetRequiredService<ITrackingService>();
+        var row = Assert.Single((await service.GetDashboardAsync(default)).Upcoming);
+        var detail = await service.GetObligationAsync(component.Id, default);
+
+        Assert.Equal(receiving.Name, row.Recipient);
+        Assert.Equal(receiving.Name, detail!.Recipient);
+    }
+
+    [Fact]
     public async Task Read_permission_is_scoped_and_does_not_grant_sending_authority()
     {
         var actor = Guid.NewGuid();
