@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ReportTracker.Application.Contracts;
+using ReportTracker.Api.Infrastructure;
 using ReportTracker.Domain.Entities;
 using ReportTracker.Infrastructure.Persistence;
 using ReportTracker.Infrastructure.Services;
@@ -18,7 +19,7 @@ namespace ReportTracker.Api.Controllers;
 [ApiController]
 [Route("api/auth")]
 public sealed class AuthController(ReportTrackerDbContext db, IAntiforgery antiforgery, IPasswordHasher<AppUser> hasher,
-    TrackingAccess access, IWebHostEnvironment environment, IConfiguration configuration) : ControllerBase
+    TrackingAccess access, IWebHostEnvironment environment, IConfiguration configuration, ILogger<AuthController> logger) : ControllerBase
 {
     [HttpGet("session")]
     [AllowAnonymous]
@@ -26,7 +27,20 @@ public sealed class AuthController(ReportTrackerDbContext db, IAntiforgery antif
     {
         Response.Headers.CacheControl = "no-store";
         SetCsrfCookie();
-        return Ok(new SessionResponse(!await db.Users.AnyAsync(ct), await CurrentAsync(ct)));
+        try
+        {
+            return Ok(new SessionResponse(!await db.Users.AnyAsync(ct), await CurrentAsync(ct)));
+        }
+        catch (Exception exception) when (DatabaseConnectionFailure.IsUnavailable(exception))
+        {
+            logger.LogWarning(exception, "Workspace connection check failed. TraceId: {TraceId}", HttpContext.TraceIdentifier);
+            DatabaseConnectionFailure.SetHeaders(Response);
+            return new ObjectResult(DatabaseConnectionFailure.Problem(HttpContext))
+            {
+                StatusCode = StatusCodes.Status503ServiceUnavailable,
+                ContentTypes = { "application/problem+json" }
+            };
+        }
     }
 
     [HttpPost("setup")]
@@ -50,18 +64,11 @@ public sealed class AuthController(ReportTrackerDbContext db, IAntiforgery antif
             if (await db.Users.AnyAsync(ct)) throw new TrackingConflictException("Initial setup is already complete. Sign in instead.");
             var division = new Division { Code = request.DivisionCode.Trim().ToUpperInvariant(), Name = request.DivisionName.Trim() };
             var user = new AppUser { EmployeeId = request.EmployeeId.Trim(), DisplayName = request.DisplayName.Trim(), Email = request.Email.Trim().ToLowerInvariant(), DivisionId = division.Id };
-            var admin = new AppRole { Name = "System Administrator", Description = "Manage accounts and divisions; no implicit business permissions." };
-            var coordinator = new AppRole { Name = "Report Coordinator", Description = "Set up reports and monitor authorized tracking records." };
-            var adminPermission = new Permission { Code = "administration.manage", Name = "Manage accounts and divisions" };
-            var reportPermission = new Permission { Code = "reports.manage", Name = "Manage report definitions and cycles" };
-            var readPermission = new Permission { Code = "tracking.read", Name = "Read tracking obligations" };
-            db.AddRange(division, user, admin, coordinator, adminPermission, reportPermission, readPermission);
-            db.LocalCredentials.Add(new LocalCredential { UserId = user.Id, PasswordHash = hasher.HashPassword(user, request.Password) });
-            db.RolePermissions.AddRange(new RolePermission { RoleId = admin.Id, PermissionId = adminPermission.Id },
-                new RolePermission { RoleId = coordinator.Id, PermissionId = reportPermission.Id }, new RolePermission { RoleId = coordinator.Id, PermissionId = readPermission.Id });
-            // Initial owner receives two explicit roles. Administration alone never grants business authority.
-            db.UserRoles.AddRange(new UserRole { UserId = user.Id, RoleId = admin.Id }, new UserRole { UserId = user.Id, RoleId = coordinator.Id });
-            db.AuditEvents.Add(new AuditEvent { EntityType = nameof(AppUser), EntityId = user.Id, ActorUserId = user.Id, Action = "InitialSetup", DataJson = "{\"roles\":[\"System Administrator\",\"Report Coordinator\"]}" });
+            db.AddRange(division,user);
+            db.LocalCredentials.Add(new LocalCredential { UserId=user.Id,PasswordHash=hasher.HashPassword(user,request.Password) });
+            var core = await AccessControlSeed.PrepareAsync(db,false,ct);
+            db.UserRoles.AddRange(new UserRole { UserId=user.Id,RoleId=core["SYS_ADMIN"].Id },new UserRole { UserId=user.Id,RoleId=core["REPORT_ADMIN"].Id });
+            db.AuditEvents.Add(new AuditEvent { EntityType = nameof(AppUser), EntityId = user.Id, ActorUserId = user.Id, Action = "InitialSetup", DataJson = "{\"roles\":[\"System Administrator\",\"Reporting Administrator\"]}" });
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
             created = user;
@@ -122,9 +129,9 @@ public sealed class AuthController(ReportTrackerDbContext db, IAntiforgery antif
 
     private async Task<SessionUser> UserDtoAsync(AppUser user, CancellationToken ct)
     {
-        var permissions = await (from role in db.UserRoles join grant in db.RolePermissions on role.RoleId equals grant.RoleId
+        var permissions = await (from role in db.UserRoles join definition in db.Roles on role.RoleId equals definition.Id join grant in db.RolePermissions on role.RoleId equals grant.RoleId
                                  join permission in db.Permissions on grant.PermissionId equals permission.Id
-                                 where role.UserId == user.Id select permission.Code).Distinct().ToListAsync(ct);
+                                 where role.UserId == user.Id && role.IsActive && definition.IsActive select permission.Code).Distinct().ToListAsync(ct);
         return new(user.Id, user.DisplayName, user.Email, user.DivisionId, permissions);
     }
 

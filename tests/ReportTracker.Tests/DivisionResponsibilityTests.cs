@@ -18,6 +18,53 @@ namespace ReportTracker.Tests;
 public sealed class DivisionResponsibilityTests
 {
     [Fact]
+    public async Task Report_can_be_created_without_officers_and_assigned_later_for_cycle_generation()
+    {
+        using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); var f = await Seed(db);
+        (await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id)).ReportDefinitionId = null;
+        await db.SaveChangesAsync();
+        var request = new CreateReportRequest("LATER", "Assign officers later", null, f.C.Id, "BB", null, "Monthly",
+            SubmittingDivisionId: f.D.Id, ReceivingDivisionId: f.C.Id, ReportDeadlineOffsetDays: 2);
+        Assert.IsType<CreatedResult>(await Controller(db, f.Coordinator.Id).CreateReport(request, default));
+        var report = await db.ReportDefinitions.SingleAsync(x => x.Code == "LATER");
+        Assert.False(await db.ResponsibilityAssignments.AnyAsync(x => x.ReportDefinitionId == report.Id));
+        var generator = scope.ServiceProvider.GetRequiredService<ICycleGenerationService>();
+        var pending = await generator.GenerateAsync(Today(), default);
+        Assert.Contains(pending.Warnings, x => x.Contains("LATER") && x.Contains("Responsibilities"));
+        Assert.False(await db.ReportCycles.AnyAsync(x => x.ReportDefinitionId == report.Id));
+
+        var endpoint = new ReportResponsibilityAssignmentsController(db, new TrackingAccess(db, new Actor(f.Coordinator.Id)));
+        var directory = Assert.IsType<ReportResponsibilityAssignments>(Assert.IsType<OkObjectResult>((await endpoint.Get(report.Id, default)).Result).Value);
+        Assert.Null(directory.FinalSubmission.PrimaryAssigneeId);
+        Assert.Equal(f.D.Id, directory.FinalSubmission.DivisionId);
+        await endpoint.Save(report.Id, new(new(f.Coordinator.Id, null), new(f.Coordinator.Id, null),
+            new(f.Submitter.Id, null), directory.RowVersion), default);
+        await generator.GenerateAsync(Today(), default);
+        var cycles = await db.ReportCycles.Include(x => x.Obligations).Where(x => x.ReportDefinitionId == report.Id).ToListAsync();
+        Assert.NotEmpty(cycles);
+        Assert.All(cycles, cycle => Assert.Equal(f.Submitter.Id, Assert.Single(cycle.Obligations).PrimaryAssigneeId));
+        var version = await db.DefinitionVersions.SingleAsync(x => x.ReportDefinitionId == report.Id);
+        Assert.Equal(2, (await db.ScheduleRules.SingleAsync(x => x.DefinitionVersionId == version.Id)).OffsetDays);
+    }
+
+    [Fact]
+    public async Task Unassigned_report_still_requires_active_divisions_and_rejects_a_deputy_without_primary()
+    {
+        using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); var f = await Seed(db);
+        (await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id)).ReportDefinitionId = null;
+        await db.SaveChangesAsync();
+        var request = new CreateReportRequest("INVALID", "Invalid report", null, f.C.Id, "BB", null, "Monthly",
+            SubmittingDivisionId: f.D.Id, ReceivingDivisionId: f.C.Id);
+        var controller = Controller(db, f.Coordinator.Id);
+        await Assert.ThrowsAsync<TrackingValidationException>(() => controller.CreateReport(request with { SubmittingDivisionId = null }, default));
+        await Assert.ThrowsAsync<TrackingValidationException>(() => controller.CreateReport(request with { ReceivingDivisionId = null }, default));
+        await Assert.ThrowsAsync<TrackingValidationException>(() => controller.CreateReport(request with { AlternateSubmittingAssigneeId = f.Submitter.Id }, default));
+        Assert.False(await db.ReportDefinitions.AnyAsync(x => x.Code == "INVALID"));
+    }
+
+    [Fact]
     public async Task New_components_are_required_and_historical_optional_obligations_do_not_block_readiness()
     {
         using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
@@ -41,14 +88,14 @@ public sealed class DivisionResponsibilityTests
         (await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id)).ReportDefinitionId = null;
         await db.SaveChangesAsync();
         var request = new CreateReportRequest("NEW", "New report", null, f.C.Id, "BB", null, "Monthly",
-            SubmittingDivisionId: f.D.Id, PrimarySubmittingOfficerId: f.Submitter.Id, ReceivingDivisionId: f.C.Id, ReportTypeId: 1);
+            SubmittingDivisionId: f.D.Id, PrimarySubmittingAssigneeId: f.Submitter.Id, ReceivingDivisionId: f.C.Id, ReportTypeId: 1);
         await Assert.ThrowsAsync<TrackingValidationException>(() =>
             Controller(db, f.Coordinator.Id).CreateReport(request with { ReportTypeId = 3 }, default));
         Assert.IsType<CreatedResult>(await Controller(db, f.Coordinator.Id).CreateReport(request, default));
         var report = await db.ReportDefinitions.SingleAsync(x => x.Code == "NEW");
         Assert.Equal(f.C.Id, report.OwnerDivisionId); Assert.Equal(f.D.Id, report.SubmittingDivisionId); Assert.Equal(1, report.ReportTypeId);
         var assignment = await db.ResponsibilityAssignments.SingleAsync(x => x.ReportDefinitionId == report.Id);
-        Assert.Equal(f.D.Id, assignment.DivisionId); Assert.Equal(f.Submitter.Id, assignment.PrimaryOfficerId);
+        Assert.Equal(f.D.Id, assignment.DivisionId); Assert.Equal(f.Submitter.Id, assignment.PrimaryAssigneeId);
     }
 
     [Fact]
@@ -63,7 +110,7 @@ public sealed class DivisionResponsibilityTests
         foreach (var cycle in cycles)
         {
             var main = Assert.Single(cycle.Obligations, x => x.Type == ObligationType.External);
-            Assert.Equal(f.D.Id, main.AccountableDivisionId); Assert.Equal(f.Submitter.Id, main.PrimaryOfficerId);
+            Assert.Equal(f.D.Id, main.AccountableDivisionId); Assert.Equal(f.Submitter.Id, main.PrimaryAssigneeId);
             var components = cycle.Obligations.Where(x => x.Type == ObligationType.Internal).ToList();
             Assert.Equal(new[] { f.A.Id, f.B.Id }.Order(), components.Select(x => x.AccountableDivisionId).Order());
             Assert.All(components, x => { Assert.Equal(f.C.Id, x.ReceivingDivisionId); Assert.Equal(f.C.Name, x.Recipient); Assert.Equal(main.Id, x.ParentObligationId); });
@@ -198,7 +245,7 @@ public sealed class DivisionResponsibilityTests
         await Assert.ThrowsAsync<TrackingValidationException>(() => controller.SetResponsibilities(f.Report.Id,
             new(f.C.Id, f.D.Id, f.Coordinator.Id, null), default));
         Assert.IsType<NoContentResult>(await controller.SetResponsibilities(f.Report.Id, new(f.C.Id, f.C.Id, f.Coordinator.Id, null), default));
-        Assert.Equal(f.D.Id, existing.AccountableDivisionId); Assert.Equal(f.Submitter.Id, existing.PrimaryOfficerId);
+        Assert.Equal(f.D.Id, existing.AccountableDivisionId); Assert.Equal(f.Submitter.Id, existing.PrimaryAssigneeId);
         Assert.Equal(f.C.Id, f.Report.SubmittingDivisionId);
         Assert.Single(await db.ResponsibilityAssignments.Where(x => !x.EffectiveToUtc.HasValue).ToListAsync());
         Assert.True(await db.AuditEvents.AnyAsync(x => x.Action == "ReportResponsibilitiesChanged"));
@@ -211,8 +258,11 @@ public sealed class DivisionResponsibilityTests
     {
         using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>(); var f = await Seed(db);
+        // This test exercises the unchanged contributor rules as an explicit global manager.
+        var grant = await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id);
+        grant.DivisionId = null; grant.ReportDefinitionId = null;
         var component = await db.ComponentDefinitions.SingleAsync(x => x.Name == "Component A");
-        var lead = component.PrimaryOfficerId!.Value;
+        var lead = component.PrimaryAssigneeId!.Value;
         var reviewer = new AppUser { EmployeeId = "reviewer", DisplayName = "Reviewer", Email = "reviewer@example.test", DivisionId = f.A.Id };
         var preparer = new AppUser { EmployeeId = "preparer", DisplayName = "Preparer", Email = "preparer@example.test", DivisionId = f.A.Id };
         db.Users.AddRange(reviewer, preparer);
@@ -229,12 +279,12 @@ public sealed class DivisionResponsibilityTests
 
         await scope.ServiceProvider.GetRequiredService<ICycleGenerationService>().GenerateAsync(Today(), default);
         var task = await db.TrackingObligations.SingleAsync(x => x.Name == "Component A");
-        Assert.Equal(contributors, ComponentValidation.Contributors(task.ContributorsJson, task.PrimaryOfficerId, task.DeputyOfficerId));
+        Assert.Equal(contributors, ComponentValidation.Contributors(task.ContributorsJson, task.PrimaryAssigneeId, task.AlternateAssigneeId));
         Assert.True(await new TrackingAccess(db, new Actor(lead)).AuthorizedObligations(true).AnyAsync(x => x.Id == task.Id));
         Assert.False(await new TrackingAccess(db, new Actor(preparer.Id)).AuthorizedObligations(true).AnyAsync(x => x.Id == task.Id));
         Assert.False(await new TrackingAccess(db, new Actor(reviewer.Id)).AuthorizedObligations(true).AnyAsync(x => x.Id == task.Id));
         await controller.SetContributors(f.Report.Id, component.Id, new([new(lead, "LeadPreparer")]), default);
-        Assert.Equal(contributors, ComponentValidation.Contributors(task.ContributorsJson, task.PrimaryOfficerId, task.DeputyOfficerId));
+        Assert.Equal(contributors, ComponentValidation.Contributors(task.ContributorsJson, task.PrimaryAssigneeId, task.AlternateAssigneeId));
     }
 
     [Fact]
@@ -253,7 +303,7 @@ public sealed class DivisionResponsibilityTests
         var controller = Controller(db, f.Coordinator.Id);
         var request = new CreateReportRequest("AUDIT", "Audit Report", "Monthly audit summary", f.C.Id, null, "AUDIT-2026", "Monthly",
             DueTime: new TimeOnly(16, 30), ComponentDeadlineOffsetDays: 0,
-            SubmittingDivisionId: f.D.Id, PrimarySubmittingOfficerId: f.Submitter.Id, ReceivingDivisionId: f.C.Id,
+            SubmittingDivisionId: f.D.Id, PrimarySubmittingAssigneeId: f.Submitter.Id, ReceivingDivisionId: f.C.Id,
             SubmissionRecipientId: recipient.Id, SubmissionDepartmentIds: [first.Id, second.Id]);
         await Assert.ThrowsAsync<TrackingValidationException>(() =>
             controller.CreateReport(request with { SubmissionDepartmentIds = [first.Id, unrelated.Id] }, default));
@@ -345,9 +395,9 @@ public sealed class DivisionResponsibilityTests
         var role = new AppRole { Name = "Coordinator" }; var permission = new Permission { Code = "reports.manage", Name = "Manage reports" };
         db.AddRange(a, b, c, d, preparerA, preparerB, coordinator, submitter, report, role, permission,
             new RolePermission { RoleId = role.Id, PermissionId = permission.Id }, new UserRole { UserId = coordinator.Id, RoleId = role.Id, DivisionId = c.Id, ReportDefinitionId = report.Id },
-            new ResponsibilityAssignment { ReportDefinitionId = report.Id, DivisionId = d.Id, PrimaryOfficerId = submitter.Id, ResponsibilityType = "MainSender", EffectiveFromUtc = DateTime.UtcNow.AddDays(-1) },
-            new ComponentDefinition { DefinitionVersionId = version.Id, Name = "Component A", ProviderDivisionId = a.Id, ReceivingDivisionId = c.Id, PrimaryOfficerId = preparerA.Id },
-            new ComponentDefinition { DefinitionVersionId = version.Id, Name = "Component B", ProviderDivisionId = b.Id, ReceivingDivisionId = c.Id, PrimaryOfficerId = preparerB.Id });
-        await db.SaveChangesAsync(); return new(a, b, c, d, report, coordinator, submitter);
+            new ResponsibilityAssignment { ReportDefinitionId = report.Id, DivisionId = d.Id, PrimaryAssigneeId = submitter.Id, ResponsibilityType = "MainSender", EffectiveFromUtc = DateTime.UtcNow.AddDays(-1) },
+            new ComponentDefinition { DefinitionVersionId = version.Id, Name = "Component A", ProviderDivisionId = a.Id, ReceivingDivisionId = c.Id, PrimaryAssigneeId = preparerA.Id },
+            new ComponentDefinition { DefinitionVersionId = version.Id, Name = "Component B", ProviderDivisionId = b.Id, ReceivingDivisionId = c.Id, PrimaryAssigneeId = preparerB.Id });
+        await db.SaveChangesAsync(); await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); return new(a, b, c, d, report, coordinator, submitter);
     }
 }

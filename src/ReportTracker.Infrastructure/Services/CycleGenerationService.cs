@@ -103,15 +103,15 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             var assignment = assignments.FirstOrDefault(x => x.ReportDefinitionId == report.Id);
             if (version is null || !activeDivisions.ContainsKey(report.OwnerDivisionId) || !report.SubmittingDivisionId.HasValue ||
                 !activeDivisions.ContainsKey(report.SubmittingDivisionId.Value) || assignment is null || assignment.DivisionId != report.SubmittingDivisionId ||
-                !activeUsers.Any(x => x.Id == assignment.PrimaryOfficerId && x.DivisionId == report.SubmittingDivisionId) ||
-                (assignment.DeputyOfficerId.HasValue && !activeUsers.Any(x => x.Id == assignment.DeputyOfficerId && x.DivisionId == report.SubmittingDivisionId)))
+                !activeUsers.Any(x => x.Id == assignment.PrimaryAssigneeId && x.DivisionId == report.SubmittingDivisionId) ||
+                (assignment.AlternateAssigneeId.HasValue && !activeUsers.Any(x => x.Id == assignment.AlternateAssigneeId && x.DivisionId == report.SubmittingDivisionId)))
             {
-                warnings.Add($"{report.Code} / {item.PeriodKey}: complete report responsibilities before generating this cycle."); skipped++; continue;
+                warnings.Add($"{report.Code} / {item.PeriodKey}: check the report's responsible divisions and complete the final submitting assignee in Responsibilities before generating this cycle."); skipped++; continue;
             }
             var components = await db.ComponentDefinitions.Where(x => x.DefinitionVersionId == version.Id).OrderBy(x => x.Name).ToListAsync(ct);
             if (components.Any(c => !activeDivisions.ContainsKey(c.ProviderDivisionId) || !activeDivisions.ContainsKey(report.ReceivingDivisionId ?? c.ReceivingDivisionId) ||
-                !activeUsers.Any(x => x.Id == c.PrimaryOfficerId && x.DivisionId == c.ProviderDivisionId) ||
-                (c.DeputyOfficerId.HasValue && !activeUsers.Any(x => x.Id == c.DeputyOfficerId && x.DivisionId == c.ProviderDivisionId))))
+                !activeUsers.Any(x => x.Id == c.PrimaryAssigneeId && x.DivisionId == c.ProviderDivisionId) ||
+                (c.AlternateAssigneeId.HasValue && !activeUsers.Any(x => x.Id == c.AlternateAssigneeId && x.DivisionId == c.ProviderDivisionId))))
             {
                 warnings.Add($"{report.Code} / {item.PeriodKey}: complete component responsibilities before generating this cycle."); skipped++; continue;
             }
@@ -121,7 +121,7 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             var cycle = new ReportCycle { ReportDefinitionId = report.Id, DefinitionVersionId = version.Id, PeriodKey = item.PeriodKey,
                 PeriodLabel = item.PeriodLabel, PeriodStart = item.PeriodStart, PeriodEnd = item.PeriodEnd };
             var main = new TrackingObligation { ReportCycleId = cycle.Id, Type = ObligationType.External, Name = TrackingRules.FinalSubmissionName,
-                AccountableDivisionId = report.SubmittingDivisionId.Value, PrimaryOfficerId = assignment.PrimaryOfficerId, DeputyOfficerId = assignment.DeputyOfficerId,
+                AccountableDivisionId = report.SubmittingDivisionId.Value, PrimaryAssigneeId = assignment.PrimaryAssigneeId, AlternateAssigneeId = assignment.AlternateAssigneeId,
                 Recipient = report.SubmissionDestination(), OriginalDueAtUtc = dueUtc, EffectiveDueAtUtc = dueUtc,
                 ReceiptStatus = version.ReceiptConfirmationRequired ? ReceiptStatus.AwaitingConfirmation : ReceiptStatus.NotRequired,
                 EvidenceStatus = EvidenceStatus.Missing };
@@ -131,9 +131,9 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                 var leadDays = ComponentLeadDays(component, version.ComponentDeadlineOffsetDays);
                 var componentDueUtc = dueUtc.AddDays(-leadDays);
                 cycle.Obligations.Add(new TrackingObligation { ReportCycleId = cycle.Id, ParentObligationId = main.Id, Type = ObligationType.Internal,
-                    Name = component.Name, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
-                    DeputyOfficerId = component.DeputyOfficerId, ReceivingDivisionId = report.ReceivingDivisionId ?? component.ReceivingDivisionId,
-                    ContributorsJson = component.ContributorsJson ?? JsonSerializer.Serialize(ComponentValidation.Contributors(null, component.PrimaryOfficerId, component.DeputyOfficerId)),
+                    Name = component.Name, AccountableDivisionId = component.ProviderDivisionId, PrimaryAssigneeId = component.PrimaryAssigneeId,
+                    AlternateAssigneeId = component.AlternateAssigneeId, ReceivingDivisionId = report.ReceivingDivisionId ?? component.ReceivingDivisionId,
+                    ContributorsJson = component.ContributorsJson ?? JsonSerializer.Serialize(ComponentValidation.Contributors(null, component.PrimaryAssigneeId, component.AlternateAssigneeId)),
                     Recipient = activeDivisions[report.ReceivingDivisionId ?? component.ReceivingDivisionId], OriginalDueAtUtc = componentDueUtc,
                     EffectiveDueAtUtc = componentDueUtc, ReceiptStatus = ReceiptStatus.NotRequired, EvidenceStatus = EvidenceStatus.NotRequired });
                 componentsCreated++;
@@ -176,14 +176,14 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
             var mainAssignment = assignments.Where(x => x.ReportDefinitionId == report.Id).OrderByDescending(x => x.EffectiveFromUtc).FirstOrDefault();
             if (!activeDivisions.ContainsKey(report.OwnerDivisionId) || !report.SubmittingDivisionId.HasValue || !activeDivisions.ContainsKey(report.SubmittingDivisionId.Value) ||
                 mainAssignment is null || mainAssignment.DivisionId != report.SubmittingDivisionId ||
-                !activeUsers.Any(x => x.Id == mainAssignment.PrimaryOfficerId && x.DivisionId == report.SubmittingDivisionId) ||
-                (mainAssignment.DeputyOfficerId.HasValue && !activeUsers.Any(x => x.Id == mainAssignment.DeputyOfficerId && x.DivisionId == report.SubmittingDivisionId)))
-            { warnings.Add($"{report.Code}: configure an active coordinating division, final submitting division and final submitting officers in Report responsibilities."); continue; }
-            var mainOfficerId = mainAssignment.PrimaryOfficerId;
+                !activeUsers.Any(x => x.Id == mainAssignment.PrimaryAssigneeId && x.DivisionId == report.SubmittingDivisionId) ||
+                (mainAssignment.AlternateAssigneeId.HasValue && !activeUsers.Any(x => x.Id == mainAssignment.AlternateAssigneeId && x.DivisionId == report.SubmittingDivisionId)))
+            { warnings.Add($"{report.Code}: check the coordinating and final submitting divisions in the report definition, then assign an active final submitting assignee in Responsibilities."); continue; }
+            var mainOfficerId = mainAssignment.PrimaryAssigneeId;
             var destination = report.SubmissionDestination();
             if (components.Any(c => !activeDivisions.ContainsKey(c.ProviderDivisionId) || !activeDivisions.ContainsKey(report.ReceivingDivisionId ?? c.ReceivingDivisionId) ||
-                !activeUsers.Any(x => x.Id == c.PrimaryOfficerId && x.DivisionId == c.ProviderDivisionId) ||
-                (c.DeputyOfficerId.HasValue && !activeUsers.Any(x => x.Id == c.DeputyOfficerId && x.DivisionId == c.ProviderDivisionId))))
+                !activeUsers.Any(x => x.Id == c.PrimaryAssigneeId && x.DivisionId == c.ProviderDivisionId) ||
+                (c.AlternateAssigneeId.HasValue && !activeUsers.Any(x => x.Id == c.AlternateAssigneeId && x.DivisionId == c.ProviderDivisionId))))
             { warnings.Add($"{report.Code}: one or more components need active preparing/receiving divisions and preparing officers."); continue; }
             var periods = Periods(version.Frequency, today, throughLocalDate).DistinctBy(x => x.Key).ToList();
             foreach (var period in periods)
@@ -196,7 +196,7 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                 var cycle = new ReportCycle { ReportDefinitionId = report.Id, DefinitionVersionId = version.Id, PeriodKey = period.Key,
                     PeriodLabel = period.Label, PeriodStart = period.Start, PeriodEnd = period.End };
                 var main = new TrackingObligation { ReportCycleId = cycle.Id, Type = ObligationType.External, Name = TrackingRules.FinalSubmissionName,
-                    AccountableDivisionId = report.SubmittingDivisionId.Value, PrimaryOfficerId = mainOfficerId, DeputyOfficerId = mainAssignment.DeputyOfficerId,
+                    AccountableDivisionId = report.SubmittingDivisionId.Value, PrimaryAssigneeId = mainOfficerId, AlternateAssigneeId = mainAssignment.AlternateAssigneeId,
                     Recipient = destination, OriginalDueAtUtc = mainDueUtc, EffectiveDueAtUtc = mainDueUtc,
                     ReceiptStatus = version.ReceiptConfirmationRequired ? ReceiptStatus.AwaitingConfirmation : ReceiptStatus.NotRequired,
                     EvidenceStatus = EvidenceStatus.Missing };
@@ -206,9 +206,9 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                     var leadDays = ComponentLeadDays(component, version.ComponentDeadlineOffsetDays);
                     var dueUtc = mainDueUtc.AddDays(-leadDays);
                     cycle.Obligations.Add(new TrackingObligation { ReportCycleId = cycle.Id, ParentObligationId = main.Id, Type = ObligationType.Internal,
-                        Name = component.Name, AccountableDivisionId = component.ProviderDivisionId, PrimaryOfficerId = component.PrimaryOfficerId,
-                        DeputyOfficerId = component.DeputyOfficerId, ReceivingDivisionId = report.ReceivingDivisionId ?? component.ReceivingDivisionId,
-                        ContributorsJson = component.ContributorsJson ?? JsonSerializer.Serialize(ComponentValidation.Contributors(null, component.PrimaryOfficerId, component.DeputyOfficerId)),
+                        Name = component.Name, AccountableDivisionId = component.ProviderDivisionId, PrimaryAssigneeId = component.PrimaryAssigneeId,
+                        AlternateAssigneeId = component.AlternateAssigneeId, ReceivingDivisionId = report.ReceivingDivisionId ?? component.ReceivingDivisionId,
+                        ContributorsJson = component.ContributorsJson ?? JsonSerializer.Serialize(ComponentValidation.Contributors(null, component.PrimaryAssigneeId, component.AlternateAssigneeId)),
                         Recipient = activeDivisions[report.ReceivingDivisionId ?? component.ReceivingDivisionId], OriginalDueAtUtc = dueUtc,
                         EffectiveDueAtUtc = dueUtc, ReceiptStatus = ReceiptStatus.NotRequired,
                         EvidenceStatus = EvidenceStatus.NotRequired } );

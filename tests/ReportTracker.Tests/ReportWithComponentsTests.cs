@@ -48,11 +48,11 @@ public sealed class ReportWithComponentsTests
         var components = request.Components!.ToArray();
         switch (failure)
         {
-            case "officer": components[1] = components[1] with { PrimaryOfficerId = f.OfficerA.Id }; break;
+            case "officer": components[1] = components[1] with { PrimaryAssigneeId = f.OfficerA.Id }; break;
             case "duplicate": components[1] = components[1] with { Name = "  COMPONENT A " }; break;
             case "lead-days": request = request with { ComponentDeadlineOffsetDays = -1 }; break;
             case "receiver": request = request with { ReceivingDivisionId = Guid.NewGuid() }; break;
-            case "deputy": components[1] = components[1] with { DeputyOfficerId = components[1].PrimaryOfficerId }; break;
+            case "deputy": components[1] = components[1] with { AlternateAssigneeId = components[1].PrimaryAssigneeId }; break;
         }
         await Assert.ThrowsAsync<TrackingValidationException>(() => Controller(db, f.Actor.Id).CreateReport(request with { Components = components }, default));
         Assert.Equal(before, counter.Count); Assert.Empty(await db.ReportDefinitions.ToListAsync()); Assert.Empty(await db.ComponentDefinitions.ToListAsync());
@@ -113,6 +113,6 @@ public sealed class ReportWithComponentsTests
         var role = new AppRole { Name = "Coordinator" }; var permission = new Permission { Code = "reports.manage", Name = "Manage reports" };
         db.AddRange(a, b, c, d, actor, officerA, officerB, submitter, role, permission, new RolePermission { RoleId = role.Id, PermissionId = permission.Id },
             new UserRole { UserId = actor.Id, RoleId = role.Id, DivisionId = c.Id });
-        await db.SaveChangesAsync(); return new(a, b, c, d, actor, officerA, officerB, submitter);
+        await db.SaveChangesAsync(); await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); return new(a, b, c, d, actor, officerA, officerB, submitter);
     }
 }

@@ -1,3 +1,4 @@
+using ReportTracker.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,7 +60,7 @@ public sealed class TrackingWorkflowTests
         var db = provider.GetRequiredService<ReportTrackerDbContext>();
         var own = Seed(db, actor);
         var other = Seed(db, Guid.NewGuid());
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
         var service = provider.GetRequiredService<ITrackingService>();
         var dashboard = await service.GetDashboardAsync(default);
         Assert.Single(dashboard.Upcoming);
@@ -79,9 +80,9 @@ public sealed class TrackingWorkflowTests
         var division = db.Divisions.Local.Single(x => x.Id == own.AccountableDivisionId);
         division.Name = "Finance Division";
         var other = Seed(db, Guid.NewGuid());
-        own.PrimaryOfficerId = other.PrimaryOfficerId;
-        own.DeputyOfficerId = actor;
-        await db.SaveChangesAsync();
+        own.PrimaryAssigneeId = other.PrimaryAssigneeId;
+        own.AlternateAssigneeId = actor;
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
 
         var service = provider.GetRequiredService<ITrackingService>();
         var row = Assert.Single((await service.GetDashboardAsync(default)).Upcoming);
@@ -106,7 +107,7 @@ public sealed class TrackingWorkflowTests
         component.ReceivingDivisionId = receiving.Id;
         component.Recipient = receiving.Id.ToString();
         db.Add(receiving);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
 
         var service = provider.GetRequiredService<ITrackingService>();
         var row = Assert.Single((await service.GetDashboardAsync(default)).Upcoming);
@@ -124,12 +125,12 @@ public sealed class TrackingWorkflowTests
         var db = provider.GetRequiredService<ReportTrackerDbContext>();
         var visible = Seed(db, actor);
         var hidden = Seed(db, Guid.NewGuid());
-        visible.PrimaryOfficerId = hidden.PrimaryOfficerId;
+        visible.PrimaryAssigneeId = hidden.PrimaryAssigneeId;
         var role = new AppRole { Name = "Division viewer" };
         var permission = new Permission { Code = "tracking.read", Name = "Read tracking" };
         db.AddRange(role, permission, new UserRole { UserId = actor, RoleId = role.Id, DivisionId = visible.AccountableDivisionId },
             new RolePermission { RoleId = role.Id, PermissionId = permission.Id });
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
         var service = provider.GetRequiredService<ITrackingService>();
         var dashboard = await service.GetDashboardAsync(default);
         Assert.Equal(0, dashboard.MyPending);
@@ -149,7 +150,7 @@ public sealed class TrackingWorkflowTests
         var db = provider.GetRequiredService<ReportTrackerDbContext>();
         var own = Seed(db, actor);
         var other = Seed(db, Guid.NewGuid());
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
         var service = provider.GetRequiredService<ITrackingService>();
         Assert.True(await service.RecordSendingAsync(own.Id, Command(rowVersion: own.RowVersion), default));
         Assert.Equal(actor, (await db.SendingEvents.SingleAsync()).ActingUserId);
@@ -168,7 +169,7 @@ public sealed class TrackingWorkflowTests
         await using var provider = Provider(actor);
         var db = provider.GetRequiredService<ReportTrackerDbContext>();
         var own = Seed(db, actor);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
         var service = provider.GetRequiredService<ITrackingService>();
         Assert.True(await service.RecordSendingAsync(own.Id, Command(true, own.RowVersion), default));
         Assert.Equal(SendingStatus.PartiallySent, own.SendingStatus);
@@ -187,12 +188,12 @@ public sealed class TrackingWorkflowTests
         {
             Name = "Completed component", Type = ObligationType.Internal, ReportCycle = main.ReportCycle,
             ReportCycleId = main.ReportCycleId, ParentObligationId = main.Id, AccountableDivisionId = main.AccountableDivisionId,
-            PrimaryOfficerId = actor, Recipient = "Main sender", OriginalDueAtUtc = main.OriginalDueAtUtc.AddDays(-1),
+            PrimaryAssigneeId = actor, Recipient = "Main sender", OriginalDueAtUtc = main.OriginalDueAtUtc.AddDays(-1),
             EffectiveDueAtUtc = main.EffectiveDueAtUtc.AddDays(-1), SendingStatus = SendingStatus.Sent,
             EvidenceStatus = EvidenceStatus.Verified, ReceiptStatus = ReceiptStatus.ReceiptConfirmed, RowVersion = new byte[8]
         };
         db.Add(component);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
 
         var dashboard = await provider.GetRequiredService<ITrackingService>().GetDashboardAsync(default);
 
@@ -226,7 +227,7 @@ public sealed class TrackingWorkflowTests
         component.SendingStatus = sending;
         component.ReceiptStatus = receipt;
         component.EvidenceStatus = evidence;
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
         var service = provider.GetRequiredService<ITrackingService>();
 
         var row = Assert.Single((await service.GetDashboardAsync(default)).Upcoming);
@@ -243,7 +244,7 @@ public sealed class TrackingWorkflowTests
         component.SendingStatus = SendingStatus.Sent;
         component.ReceiptStatus = ReceiptStatus.ReceiptConfirmed;
         component.EvidenceStatus = EvidenceStatus.Verified;
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
         row = Assert.Single((await service.GetDashboardAsync(default)).Upcoming);
         Assert.True(row.IsReadyForSubmission);
         Assert.True(row.CanRecordSending);
@@ -267,7 +268,7 @@ public sealed class TrackingWorkflowTests
                 AccountableDivisionId = main.AccountableDivisionId, IsRequired = required,
                 ExceptionStatus = required ? ExceptionStatus.Cancelled : ExceptionStatus.None
             });
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); if (!await db.Permissions.AnyAsync(x => x.Code == AccessPermissions.ReportSubmit)) { await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); }
         var service = provider.GetRequiredService<ITrackingService>();
         var row = (await service.GetDashboardAsync(default)).Upcoming.Single(x => x.Id == main.Id);
         Assert.Equal(0, row.RequiredComponentCount);
@@ -306,7 +307,7 @@ public sealed class TrackingWorkflowTests
         var report = new ReportDefinition { Code = Guid.NewGuid().ToString(), Name = "Test report", OwnerDivisionId = division.Id, BbRecipient = "BB" };
         var cycle = new ReportCycle { ReportDefinition = report, PeriodKey = "2026-10", PeriodLabel = "October", ReportDefinitionId = report.Id };
         var obligation = new TrackingObligation { Name = "BB submission", Type = ObligationType.External, ReportCycle = cycle, ReportCycleId = cycle.Id,
-            AccountableDivisionId = division.Id, PrimaryOfficerId = userId, Recipient = "BB", EffectiveDueAtUtc = DateTime.UtcNow.AddDays(1),
+            AccountableDivisionId = division.Id, PrimaryAssigneeId = userId, Recipient = "BB", EffectiveDueAtUtc = DateTime.UtcNow.AddDays(1),
             OriginalDueAtUtc = DateTime.UtcNow.AddDays(1), RowVersion = new byte[8], ReceiptStatus = ReceiptStatus.AwaitingConfirmation, EvidenceStatus = EvidenceStatus.Missing };
         db.AddRange(division, user, obligation);
         return obligation;

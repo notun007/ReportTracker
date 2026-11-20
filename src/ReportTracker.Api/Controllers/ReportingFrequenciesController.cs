@@ -21,7 +21,7 @@ public sealed class ReportingFrequenciesController(ReportTrackerDbContext db, Tr
     {
         await access.EnsureActiveAsync(ct);
         if (!await access.HasAsync("administration.manage", null, null, ct) &&
-            !await access.Grants("reports.manage").AnyAsync(ct))
+            !await access.ConfigurationGrants().AnyAsync(ct))
             return Forbid();
         var frequencies = await db.ReportingFrequencies.AsNoTracking()
             .OrderBy(frequency => frequency.DisplayOrder)

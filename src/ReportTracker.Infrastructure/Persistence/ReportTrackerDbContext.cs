@@ -99,6 +99,8 @@ public sealed class ReportTrackerDbContext(DbContextOptions<ReportTrackerDbConte
         modelBuilder.Entity<ReportCycle>().HasIndex(x => new { x.ReportDefinitionId, x.PeriodEnd }).IsUnique();
         modelBuilder.Entity<ChannelRequirement>().HasIndex(x => new { x.TrackingObligationId, x.Channel }).IsUnique();
         modelBuilder.Entity<AppRole>().HasIndex(x => x.Name).IsUnique();
+        modelBuilder.Entity<AppRole>().Property(x => x.Code).HasMaxLength(64);
+        modelBuilder.Entity<AppRole>().HasIndex(x => x.Code).IsUnique();
         modelBuilder.Entity<Permission>().HasIndex(x => x.Code).IsUnique();
         modelBuilder.Entity<UserRole>().HasIndex(x => new { x.UserId, x.RoleId, x.DivisionId, x.ReportDefinitionId }).IsUnique();
         modelBuilder.Entity<RolePermission>().HasIndex(x => new { x.RoleId, x.PermissionId }).IsUnique();

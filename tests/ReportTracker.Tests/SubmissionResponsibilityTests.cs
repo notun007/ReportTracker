@@ -15,6 +15,124 @@ namespace ReportTracker.Tests;
 public sealed class SubmissionResponsibilityTests
 {
     [Fact]
+    public async Task Receiving_division_membership_alone_grants_no_visibility_or_receipt_authority()
+    {
+        await using var db = Db(); var f = await Seed(db);
+        var kanta = new AppUser { EmployeeId = "6030", DisplayName = "Kanta", Email = "kanta@example.test", DivisionId = f.Receiver.DivisionId };
+        db.Users.Add(kanta); await db.SaveChangesAsync();
+        var access = Access(db, kanta.Id);
+        Assert.Empty(await access.AuthorizedObligations().ToListAsync());
+        Assert.Empty(await access.AssignedReceivingObligations().ToListAsync());
+        Assert.Empty(await access.AuthorizedReceiptObligations().ToListAsync());
+        Assert.IsType<NotFoundResult>((await Controller(db, kanta.Id).Actions(f.Task.Id, default)).Result);
+        Assert.IsType<NotFoundResult>((await Controller(db, kanta.Id).Evidence(f.Task.Id, default)).Result);
+        Assert.IsType<NotFoundResult>((await Controller(db, kanta.Id).Receipts(f.Task.Id, default)).Result);
+        Assert.IsType<NotFoundResult>((await Controller(db, kanta.Id).ConfirmReceipt(f.Task.Id, Receipt(), default)).Result);
+    }
+
+    [Theory]
+    [InlineData("future")]
+    [InlineData("expired")]
+    [InlineData("other-report")]
+    [InlineData("other-division")]
+    [InlineData("inactive")]
+    public async Task Receiving_access_requires_current_assignment_matching_report_division_and_active_user(string scenario)
+    {
+        await using var db = Db(); var f = await Seed(db);
+        var assignment = await db.ResponsibilityAssignments.SingleAsync();
+        switch (scenario)
+        {
+            case "future": assignment.EffectiveFromUtc = DateTime.UtcNow.AddDays(1); break;
+            case "expired": assignment.EffectiveToUtc = DateTime.UtcNow.AddMinutes(-1); break;
+            case "other-report": assignment.ReportDefinitionId = Guid.NewGuid(); break;
+            case "other-division": f.Receiver.DivisionId = f.Stranger.DivisionId; break;
+            case "inactive": f.Receiver.IsActive = false; break;
+        }
+        await db.SaveChangesAsync();
+        Assert.Empty(await Access(db, f.Receiver.Id).AuthorizedObligations().ToListAsync());
+        Assert.Empty(await Access(db, f.Receiver.Id).AuthorizedReceiptObligations().ToListAsync());
+    }
+
+    [Fact]
+    public async Task Assigned_preparing_contributor_cannot_confirm_own_component_even_with_receiving_assignment()
+    {
+        await using var db = Db(); var f = await Seed(db);
+        f.Task.ContributorsJson = System.Text.Json.JsonSerializer.Serialize(new[] { new ComponentContributorItem(f.Receiver.Id, "Preparer") });
+        await db.SaveChangesAsync();
+        Assert.True(await Access(db, f.Receiver.Id).AuthorizedObligations().AnyAsync(x => x.Id == f.Task.Id));
+        Assert.False(await Access(db, f.Receiver.Id).AuthorizedReceiptObligations().AnyAsync(x => x.Id == f.Task.Id));
+        Assert.IsType<NotFoundResult>((await Controller(db, f.Receiver.Id).ConfirmReceipt(f.Task.Id, Receipt(), default)).Result);
+    }
+
+    [Fact]
+    public async Task Coordinator_assigns_named_receivers_and_can_revoke_access_without_removing_history()
+    {
+        await using var db = Db(); var f = await Seed(db);
+        var report = f.Task.ReportCycle.ReportDefinition;
+        f.Stranger.DivisionId = f.Receiver.DivisionId;
+        db.UserRoles.Add(new UserRole {UserId=f.Stranger.Id,RoleId=(await db.Roles.SingleAsync(x=>x.Code=="COMPONENT_RECEIVER")).Id,ReportDefinitionId=report.Id});
+        await db.SaveChangesAsync();
+        var controller = new ReceivingOfficersController(db, Access(db, f.Coordinator.Id));
+        var directory = Assert.IsType<ReceivingOfficerDirectory>(Assert.IsType<OkObjectResult>((await controller.Get(report.Id, f.Receiver.DivisionId, default)).Result).Value);
+        Assert.Contains(directory.Officers, x => x.Id == f.Stranger.Id);
+        Assert.Equal(new[] { f.Receiver.Id }, directory.SelectedOfficerIds);
+        Assert.IsType<NoContentResult>(await controller.Set(report.Id, new(f.Receiver.DivisionId, [f.Stranger.Id], directory.RowVersion), default));
+        Assert.False(await Access(db, f.Receiver.Id).AuthorizedObligations().AnyAsync(x => x.Id == f.Task.Id));
+        Assert.True(await Access(db, f.Stranger.Id).AssignedReceivingObligations().AnyAsync(x => x.Id == f.Task.Id));
+        Assert.False(await Access(db, f.Stranger.Id).AuthorizedObligations(true).AnyAsync(x => x.Id == f.Task.Id));
+        Assert.IsType<CreatedResult>((await Controller(db, f.Stranger.Id).ConfirmReceipt(f.Task.Id, Receipt(), default)).Result);
+        Assert.IsType<NoContentResult>(await controller.Set(report.Id,
+            new(f.Receiver.DivisionId, [], Convert.ToBase64String(report.RowVersion)), default));
+        Assert.False(await Access(db, f.Stranger.Id).AuthorizedObligations().AnyAsync(x => x.Id == f.Task.Id));
+        Assert.Single(await db.ReceiptConfirmations.ToListAsync());
+        Assert.Equal(2, await db.AuditEvents.CountAsync(x => x.Action == "ReceivingOfficersAssigned"));
+        Assert.Equal(2, await db.ResponsibilityAssignments.CountAsync(x => x.EffectiveToUtc.HasValue));
+    }
+
+    [Fact]
+    public async Task Receiving_assignments_cannot_be_self_granted_or_managed_outside_coordinator_scope()
+    {
+        await using var db = Db(); var f = await Seed(db);
+        var report = f.Task.ReportCycle.ReportDefinition;
+        var controller = new ReceivingOfficersController(db, Access(db, f.Receiver.Id));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => controller.Get(report.Id, f.Receiver.DivisionId, default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => controller.Set(report.Id,
+            new(f.Receiver.DivisionId, [f.Receiver.Id], Convert.ToBase64String(report.RowVersion)), default));
+        var grant = await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id);
+        grant.ReportDefinitionId = Guid.NewGuid(); await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => new ReceivingOfficersController(db, Access(db, f.Coordinator.Id))
+            .Get(report.Id, f.Receiver.DivisionId, default));
+        Assert.Empty(db.AuditEvents);
+    }
+
+    [Theory]
+    [InlineData("other-division")]
+    [InlineData("inactive")]
+    [InlineData("duplicate")]
+    [InlineData("unrelated-route")]
+    [InlineData("invalid-version")]
+    public async Task Receiver_assignment_rejects_invalid_officers_routes_and_tokens(string scenario)
+    {
+        await using var db = Db(); var f = await Seed(db);
+        var report = f.Task.ReportCycle.ReportDefinition;
+        var division = f.Receiver.DivisionId;
+        IReadOnlyList<Guid> ids = [f.Receiver.Id];
+        var token = Convert.ToBase64String(report.RowVersion);
+        switch (scenario)
+        {
+            case "other-division": ids = [f.Sender.Id]; break;
+            case "inactive": f.Receiver.IsActive = false; break;
+            case "duplicate": ids = [f.Receiver.Id, f.Receiver.Id]; break;
+            case "unrelated-route": division = f.Stranger.DivisionId; ids = [f.Stranger.Id]; break;
+            case "invalid-version": token = "not-base64"; break;
+        }
+        await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<TrackingValidationException>(() => new ReceivingOfficersController(db, Access(db, f.Coordinator.Id))
+            .Set(report.Id, new(division, ids, token), default));
+        Assert.Empty(db.AuditEvents);
+    }
+
+    [Fact]
     public async Task Receiving_officer_can_read_task_but_cannot_send_or_upload_evidence()
     {
         await using var db = Db(); var f = await Seed(db);
@@ -118,14 +236,17 @@ public sealed class SubmissionResponsibilityTests
         var report = new ReportDefinition { Code = "RIT", Name = "RIT", OwnerDivisionId = sendingDivision.Id, BbRecipient = "BB" };
         var cycle = new ReportCycle { ReportDefinition = report, ReportDefinitionId = report.Id, PeriodKey = "2026-11", PeriodLabel = "November" };
         var task = new TrackingObligation { Name = "Internal figures", Type = ObligationType.Internal, ReportCycle = cycle, ReportCycleId = cycle.Id,
-            AccountableDivisionId = sendingDivision.Id, ReceivingDivisionId = receivingDivision.Id, PrimaryOfficerId = sender.Id, Recipient = "Receiving",
+            AccountableDivisionId = sendingDivision.Id, ReceivingDivisionId = receivingDivision.Id, PrimaryAssigneeId = sender.Id, Recipient = "Receiving",
             ReceiptStatus = ReceiptStatus.AwaitingConfirmation, OriginalDueAtUtc = DateTime.UtcNow, EffectiveDueAtUtc = DateTime.UtcNow };
         task.SendingEvents.Add(new SendingEvent { ActingUserId = sender.Id, ActualSentAtUtc = DateTime.UtcNow.AddHours(-1), Recipient = "Receiving", Channel = "Email" });
         var role = new AppRole { Name = "Coordinator" }; var permission = new Permission { Code = "reports.manage", Name = "Manage reports" };
         db.AddRange(sendingDivision, receivingDivision, otherDivision, sender, receiver, coordinator, stranger, task, role, permission,
+            new ResponsibilityAssignment { ReportDefinitionId = report.Id, DivisionId = receivingDivision.Id,
+                PrimaryAssigneeId = receiver.Id, ResponsibilityType = TrackingAccess.ComponentReceiverResponsibility,
+                EffectiveFromUtc = DateTime.UtcNow.AddDays(-1) },
             new RolePermission { RoleId = role.Id, PermissionId = permission.Id },
             new UserRole { UserId = sender.Id, RoleId = role.Id, DivisionId = sendingDivision.Id, ReportDefinitionId = report.Id },
             new UserRole { UserId = coordinator.Id, RoleId = role.Id, DivisionId = sendingDivision.Id, ReportDefinitionId = report.Id });
-        await db.SaveChangesAsync(); return new(task, sender, receiver, coordinator, stranger);
+        await db.SaveChangesAsync(); await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync(); return new(task, sender, receiver, coordinator, stranger);
     }
 }

@@ -29,6 +29,12 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasColumnType("RAW(16)")
                         .HasColumnName("id");
 
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("NVARCHAR2(64)")
+                        .HasColumnName("code");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TIMESTAMP(6)")
                         .HasColumnName("created_at_utc");
@@ -37,6 +43,14 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasMaxLength(2000)
                         .HasColumnType("NVARCHAR2(2000)")
                         .HasColumnName("description");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("NUMBER(1)")
+                        .HasColumnName("is_active");
+
+                    b.Property<bool>("IsSystem")
+                        .HasColumnType("NUMBER(1)")
+                        .HasColumnName("is_system");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -56,6 +70,10 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
 
                     b.HasKey("Id")
                         .HasName("pk_rt_app_roles_id");
+
+                    b.HasIndex("Code")
+                        .IsUnique()
+                        .HasDatabaseName("uq_rt_app_roles_code");
 
                     b.HasIndex("Name")
                         .IsUnique()
@@ -304,6 +322,10 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasColumnType("RAW(16)")
                         .HasColumnName("id");
 
+                    b.Property<Guid?>("AlternateAssigneeId")
+                        .HasColumnType("RAW(16)")
+                        .HasColumnName("alternate_assignee_id");
+
                     b.Property<string>("ContributorsJson")
                         .HasColumnType("NCLOB")
                         .HasColumnName("contributors_json");
@@ -320,10 +342,6 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasColumnType("RAW(16)")
                         .HasColumnName("definition_version_id");
 
-                    b.Property<Guid?>("DeputyOfficerId")
-                        .HasColumnType("RAW(16)")
-                        .HasColumnName("deputy_officer_id");
-
                     b.Property<string>("Description")
                         .HasMaxLength(2000)
                         .HasColumnType("NVARCHAR2(2000)")
@@ -335,9 +353,9 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasColumnType("NVARCHAR2(2000)")
                         .HasColumnName("name");
 
-                    b.Property<Guid?>("PrimaryOfficerId")
+                    b.Property<Guid?>("PrimaryAssigneeId")
                         .HasColumnType("RAW(16)")
-                        .HasColumnName("primary_officer_id");
+                        .HasColumnName("primary_assignee_id");
 
                     b.Property<Guid>("ProviderDivisionId")
                         .HasColumnType("RAW(16)")
@@ -1568,13 +1586,13 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasColumnType("RAW(16)")
                         .HasColumnName("id");
 
+                    b.Property<Guid?>("AlternateAssigneeId")
+                        .HasColumnType("RAW(16)")
+                        .HasColumnName("alternate_assignee_id");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TIMESTAMP(6)")
                         .HasColumnName("created_at_utc");
-
-                    b.Property<Guid?>("DeputyOfficerId")
-                        .HasColumnType("RAW(16)")
-                        .HasColumnName("deputy_officer_id");
 
                     b.Property<Guid>("DivisionId")
                         .HasColumnType("RAW(16)")
@@ -1588,9 +1606,9 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasColumnType("TIMESTAMP(6)")
                         .HasColumnName("effective_to_utc");
 
-                    b.Property<Guid>("PrimaryOfficerId")
+                    b.Property<Guid>("PrimaryAssigneeId")
                         .HasColumnType("RAW(16)")
-                        .HasColumnName("primary_officer_id");
+                        .HasColumnName("primary_assignee_id");
 
                     b.Property<Guid>("ReportDefinitionId")
                         .HasColumnType("RAW(16)")
@@ -2047,6 +2065,10 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasColumnType("RAW(16)")
                         .HasColumnName("accountable_division_id");
 
+                    b.Property<Guid?>("AlternateAssigneeId")
+                        .HasColumnType("RAW(16)")
+                        .HasColumnName("alternate_assignee_id");
+
                     b.Property<string>("ContributorsJson")
                         .HasColumnType("NCLOB")
                         .HasColumnName("contributors_json");
@@ -2062,10 +2084,6 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TIMESTAMP(6)")
                         .HasColumnName("created_at_utc");
-
-                    b.Property<Guid?>("DeputyOfficerId")
-                        .HasColumnType("RAW(16)")
-                        .HasColumnName("deputy_officer_id");
 
                     b.Property<DateTime>("EffectiveDueAtUtc")
                         .HasColumnType("TIMESTAMP(6)")
@@ -2099,9 +2117,9 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                         .HasColumnType("RAW(16)")
                         .HasColumnName("parent_obligation_id");
 
-                    b.Property<Guid?>("PrimaryOfficerId")
+                    b.Property<Guid?>("PrimaryAssigneeId")
                         .HasColumnType("RAW(16)")
-                        .HasColumnName("primary_officer_id");
+                        .HasColumnName("primary_assignee_id");
 
                     b.Property<int>("ReceiptStatus")
                         .HasColumnType("NUMBER(10)")
@@ -2171,6 +2189,10 @@ namespace ReportTracker.Infrastructure.Persistence.OracleMigrations
                     b.Property<Guid?>("DivisionId")
                         .HasColumnType("RAW(16)")
                         .HasColumnName("division_id");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("NUMBER(1)")
+                        .HasColumnName("is_active");
 
                     b.Property<Guid?>("ReportDefinitionId")
                         .HasColumnType("RAW(16)")

@@ -46,7 +46,7 @@ public sealed class ExtensionsController(ReportTrackerDbContext db, TrackingAcce
         var obligation = await db.TrackingObligations.Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition)
             .FirstOrDefaultAsync(x => x.Id == extension.TrackingObligationId, ct);
         if (obligation is null) return NotFound();
-        await access.RequireAsync("reports.manage", obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        await access.RequireAsync(AccessPermissions.Extensions, obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
         if (extension.Status != ExtensionStatus.Pending) throw new TrackingConflictException("This extension request has already been decided.");
         if (extension.RequestedByUserId == access.UserId) throw new TrackingConflictException("The requester cannot approve or reject their own extension request.");
         if (!Enum.TryParse<ExtensionStatus>(request.Decision, true, out var decision) || decision is not (ExtensionStatus.Approved or ExtensionStatus.Rejected))
@@ -69,8 +69,13 @@ public sealed class RemindersController(ReportTrackerDbContext db, TrackingAcces
     public async Task<ActionResult<IReadOnlyList<ReminderPolicyItem>>> Policies(CancellationToken ct)
     {
         await access.EnsureActiveAsync(ct);
-        if (!await access.Grants("reports.manage").AnyAsync(ct) && !await access.HasAsync("administration.manage", null, null, ct)) return Forbid();
-        var rows = await db.ReminderPolicies.AsNoTracking().OrderBy(x => x.Name).ToListAsync(ct);
+        if (!await access.GrantsAny(AccessPermissions.Reminders,AccessPermissions.Monitor).AnyAsync(ct) && !await access.HasAsync("administration.manage", null, null, ct)) return Forbid();
+        var global = await access.HasAsync(AccessPermissions.Reference,null,null,ct);
+        var grants = access.GrantsAny(AccessPermissions.Reminders,AccessPermissions.Monitor);
+        var visibleReports = db.ReportDefinitions.Where(r => grants.Any(g =>
+            (!g.DivisionId.HasValue || g.DivisionId == r.OwnerDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == r.Id)));
+        var rows = await db.ReminderPolicies.AsNoTracking().Where(x => global ||
+            x.ReportDefinitionId.HasValue && visibleReports.Any(r => r.Id == x.ReportDefinitionId)).OrderBy(x => x.Name).ToListAsync(ct);
         var reports = await db.ReportDefinitions.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
         return Ok(rows.Select(x => new ReminderPolicyItem(x.Id, x.Name, x.ReportDefinitionId,
             x.ReportDefinitionId.HasValue ? reports.GetValueOrDefault(x.ReportDefinitionId.Value, "Unknown report") : "All reports",
@@ -85,7 +90,7 @@ public sealed class RemindersController(ReportTrackerDbContext db, TrackingAcces
         {
             var report = await db.ReportDefinitions.FirstOrDefaultAsync(x => x.Id == request.ReportDefinitionId && x.IsActive, ct);
             if (report is null) throw new TrackingValidationException("Choose an active report.");
-            await access.RequireAsync("reports.manage", report.OwnerDivisionId, report.Id, ct);
+            await access.RequireAsync(AccessPermissions.Reminders, report.OwnerDivisionId, report.Id, ct);
         }
         else await access.RequireAsync("administration.manage", null, null, ct);
         var leadDays = request.LeadDaysCsv.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -95,7 +100,7 @@ public sealed class RemindersController(ReportTrackerDbContext db, TrackingAcces
         if (channels.Length == 0 || channels.Any(x => x is not ("Email" or "SMS"))) throw new TrackingValidationException("Choose Email and/or SMS.");
         var policy = new ReminderPolicy { Name = request.Name.Trim(), ReportDefinitionId = request.ReportDefinitionId,
             ObligationCategory = request.ObligationCategory.Trim(), LeadDaysCsv = string.Join(',', leadDays.Distinct()), DispatchTime = request.DispatchTime,
-            ChannelsCsv = string.Join(',', channels.Distinct()), RecipientsCsv = request.RecipientsCsv?.Trim() ?? "Primary,Deputy",
+            ChannelsCsv = string.Join(',', channels.Distinct()), RecipientsCsv = request.RecipientsCsv?.Trim() ?? "Primary,Alternate",
             DailyOverdueReminders = request.DailyOverdueReminders, WorkingDaysCsv = request.WorkingDaysCsv?.Trim() ?? "Sun,Mon,Tue,Wed,Thu",
             QuietHoursStart = request.QuietHoursStart, QuietHoursEnd = request.QuietHoursEnd,
             EscalationAfterDays = request.EscalationAfterDays, IsActive = request.IsActive };
@@ -126,12 +131,16 @@ public sealed class RemindersController(ReportTrackerDbContext db, TrackingAcces
     public async Task<ActionResult<IReadOnlyList<NotificationItem>>> Deliveries([FromQuery] int take = 100, CancellationToken ct = default)
     {
         await access.EnsureActiveAsync(ct);
-        if (!await access.Grants("reports.manage").AnyAsync(ct) && !await access.HasAsync("administration.manage", null, null, ct)) return Forbid();
+        if (!await access.GrantsAny(AccessPermissions.Reminders,AccessPermissions.Monitor).AnyAsync(ct) && !await access.HasAsync("administration.manage", null, null, ct)) return Forbid();
         take = Math.Clamp(take, 1, 500);
+        var global = await access.HasAsync(AccessPermissions.Reference,null,null,ct);
+        var grants = access.GrantsAny(AccessPermissions.Reminders,AccessPermissions.Monitor);
         var rows = await (from job in db.NotificationJobs.AsNoTracking()
             join obligation in db.TrackingObligations on job.TrackingObligationId equals obligation.Id
             join cycle in db.ReportCycles on obligation.ReportCycleId equals cycle.Id
             join report in db.ReportDefinitions on cycle.ReportDefinitionId equals report.Id
+            where global || grants.Any(g => (!g.DivisionId.HasValue || g.DivisionId == report.OwnerDivisionId) &&
+                (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == report.Id))
             join delivery in db.NotificationDeliveries on job.Id equals delivery.NotificationJobId into deliveries
             from delivery in deliveries.OrderByDescending(x => x.AttemptedAtUtc).Take(1).DefaultIfEmpty()
             orderby job.DueAtUtc descending

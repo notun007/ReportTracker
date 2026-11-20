@@ -32,14 +32,17 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
             .FirstOrDefaultAsync(x => x.Id == obligationId, ct);
         if (obligation is null) return NotFound();
         var writable = await access.AuthorizedObligations(true).AnyAsync(x => x.Id == obligationId, ct);
-        var reviewer = await access.HasAsync("reports.manage", obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        var reviewer = await access.HasAsync(AccessPermissions.EvidenceReview, obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        var manager = await access.HasAsync(AccessPermissions.Responsibilities, obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        var upload = writable && await access.HasAsync(AccessPermissions.Upload, obligation.AccountableDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
         var hasSending = await db.SendingEvents.AnyAsync(x => x.TrackingObligationId == obligationId && !x.IsReversed, ct);
         var canReceive = hasSending && await access.AuthorizedReceiptObligations().AnyAsync(x => x.Id == obligationId, ct);
         var receiverName = await db.Divisions.Where(x => x.Id == obligation.ReceivingDivisionId).Select(x => x.Name).FirstOrDefaultAsync(ct);
-        var canAssign = reviewer && obligation.Type == ObligationType.Internal && !obligation.ReportCycle.ReportDefinition.ReceivingDivisionId.HasValue;
+        var canAssign = manager && obligation.Type == ObligationType.Internal && !obligation.ReportCycle.ReportDefinition.ReceivingDivisionId.HasValue;
         var divisions = canAssign ? await db.Divisions.Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => new LookupItem(x.Id, x.Name)).ToListAsync(ct) : [];
-        return Ok(new ObligationActions(writable, canReceive, reviewer, writable, obligation.Type == ObligationType.External,
-            hasSending, obligation.ReceivingDivisionId, receiverName, canAssign, divisions));
+        return Ok(new ObligationActions(upload, canReceive, reviewer, writable, obligation.Type == ObligationType.External,
+            hasSending, obligation.ReceivingDivisionId, receiverName, canAssign, divisions,
+            manager && obligation.Type == ObligationType.Internal && obligation.ReceivingDivisionId.HasValue));
     }
 
     [HttpPatch("receiving-division")]
@@ -47,7 +50,7 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
     {
         var obligation = await db.TrackingObligations.Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition).FirstOrDefaultAsync(x => x.Id == obligationId, ct);
         if (obligation is null) return NotFound();
-        await access.RequireAsync("reports.manage", obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        await access.RequireAsync(AccessPermissions.Responsibilities, obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
         if (obligation.Type != ObligationType.Internal) throw new TrackingValidationException("Receiving division applies to internal tasks only.");
         if (obligation.ReportCycle.ReportDefinition.ReceivingDivisionId is Guid receiver && request.ReceivingDivisionId != receiver)
             throw new TrackingValidationException("Use the receiving division configured on the report.");
@@ -80,7 +83,7 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
         await access.EnsureActiveAsync(ct);
         if (!await access.AuthorizedObligations().AnyAsync(x => x.Id == obligationId, ct)) return NotFound();
         var scope = await db.TrackingObligations.Where(x => x.Id == obligationId).Select(x => new { x.ReportCycle.ReportDefinition.OwnerDivisionId, x.ReportCycle.ReportDefinitionId }).SingleAsync(ct);
-        var canReview = await access.HasAsync("reports.manage", scope.OwnerDivisionId, scope.ReportDefinitionId, ct);
+        var canReview = await access.HasAsync(AccessPermissions.EvidenceReview, scope.OwnerDivisionId, scope.ReportDefinitionId, ct);
         var rows = await EvidenceQuery(obligationId).ToListAsync(ct);
         return Ok(rows.Select(x => NormalizeEvidence(x) with { CanReview = canReview && x.UploadedByUserId != access.UserId && x.Status == "Provided" }).ToList());
     }
@@ -92,6 +95,8 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
         await access.EnsureActiveAsync(ct);
         var obligation = await access.AuthorizedObligations(true).Include(x => x.SendingEvents).FirstOrDefaultAsync(x => x.Id == obligationId, ct);
         if (obligation is null) return NotFound();
+        var reportId = await db.ReportCycles.Where(x => x.Id == obligation.ReportCycleId).Select(x => x.ReportDefinitionId).SingleAsync(ct);
+        await access.RequireAsync(AccessPermissions.Upload, obligation.AccountableDivisionId, reportId, ct);
         if (file.Length is <= 0 or > 10_485_760) throw new TrackingValidationException("Evidence must be between 1 byte and 10 MB.");
         var extension = Path.GetExtension(file.FileName);
         if (!AllowedFiles.TryGetValue(extension, out var allowed)) throw new TrackingValidationException("Evidence must be PDF, PNG, JPG or JPEG.");
@@ -218,7 +223,7 @@ public sealed class EvidenceController(ReportTrackerDbContext db, TrackingAccess
         if (evidence?.TrackingObligationId is not Guid obligationId) return NotFound();
         var obligation = await db.TrackingObligations.Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition).FirstOrDefaultAsync(x => x.Id == obligationId, ct);
         if (obligation is null) return NotFound();
-        await access.RequireAsync("reports.manage", obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
+        await access.RequireAsync(AccessPermissions.EvidenceReview, obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
         if (evidence.UploadedByUserId == access.UserId) throw new TrackingConflictException("Another authorized coordinator must review your evidence.");
         if (evidence.Status != EvidenceStatus.Provided) throw new TrackingConflictException("Only evidence awaiting review can be verified or rejected.");
         if (!Enum.TryParse<EvidenceStatus>(request.Decision, true, out var decision) || decision is not (EvidenceStatus.Verified or EvidenceStatus.Rejected))

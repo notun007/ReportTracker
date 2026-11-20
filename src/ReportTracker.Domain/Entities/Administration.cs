@@ -3,17 +3,24 @@ using ReportTracker.Domain.Enums;
 
 namespace ReportTracker.Domain.Entities;
 
-public sealed class AppRole : Entity { public required string Name { get; set; } public string? Description { get; set; } }
+public sealed class AppRole : Entity
+{
+    public string Code { get; set; } = "";
+    public required string Name { get; set; }
+    public string? Description { get; set; }
+    public bool IsActive { get; set; } = true;
+    public bool IsSystem { get; set; }
+}
 public sealed class Permission : Entity { public required string Code { get; set; } public required string Name { get; set; } }
-public sealed class UserRole : Entity { public Guid UserId { get; set; } public Guid RoleId { get; set; } public Guid? DivisionId { get; set; } public Guid? ReportDefinitionId { get; set; } }
+public sealed class UserRole : Entity { public Guid UserId { get; set; } public Guid RoleId { get; set; } public Guid? DivisionId { get; set; } public Guid? ReportDefinitionId { get; set; } public bool IsActive { get; set; } = true; }
 public sealed class RolePermission : Entity { public Guid RoleId { get; set; } public Guid PermissionId { get; set; } }
 
 public sealed class ResponsibilityAssignment : Entity
 {
     public Guid ReportDefinitionId { get; set; }
     public Guid DivisionId { get; set; }
-    public Guid PrimaryOfficerId { get; set; }
-    public Guid? DeputyOfficerId { get; set; }
+    public Guid PrimaryAssigneeId { get; set; }
+    public Guid? AlternateAssigneeId { get; set; }
     public required string ResponsibilityType { get; set; }
     public DateTime EffectiveFromUtc { get; set; }
     public DateTime? EffectiveToUtc { get; set; }
@@ -78,7 +85,7 @@ public sealed class ReminderPolicy : Entity
     public TimeOnly DispatchTime { get; set; }
     public string TimeZoneId { get; set; } = "Asia/Dhaka";
     public required string ChannelsCsv { get; set; }
-    public string RecipientsCsv { get; set; } = "Primary,Deputy";
+    public string RecipientsCsv { get; set; } = "Primary,Alternate";
     public bool DailyOverdueReminders { get; set; } = true;
     public string WorkingDaysCsv { get; set; } = "Sun,Mon,Tue,Wed,Thu";
     public TimeOnly? QuietHoursStart { get; set; }

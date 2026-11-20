@@ -22,7 +22,7 @@ public sealed class ReportingCycleLookupTests
         var current = Cycle(report, "2026-11", new DateOnly(2026, 11, 1));
         var due = new DateTime(2026, 12, 3, 11, 0, 0, DateTimeKind.Utc);
         current.Obligations.Add(new TrackingObligation { Name = "Final BB task", Type = ObligationType.External,
-            AccountableDivisionId = division.Id, PrimaryOfficerId = officer.Id, Recipient = "BB",
+            AccountableDivisionId = division.Id, PrimaryAssigneeId = officer.Id, Recipient = "BB",
             OriginalDueAtUtc = due.AddDays(-1), EffectiveDueAtUtc = due,
             ReceiptStatus = ReceiptStatus.ReceiptConfirmed, EvidenceStatus = EvidenceStatus.Verified });
         db.AddRange(old, current, Cycle(other, "2026-11", new DateOnly(2026, 11, 1)));
@@ -33,8 +33,8 @@ public sealed class ReportingCycleLookupTests
         var rows = Assert.IsType<List<ReportingCycleItem>>(Assert.IsType<OkObjectResult>(response.Result).Value);
         Assert.Equal(new[] { "2026-11", "2026-10" }, rows.Select(x => x.PeriodKey));
         var task = Assert.Single(rows[0].Obligations);
-        Assert.Equal(officer.Id, task.PrimaryOfficerId);
-        Assert.Equal("Former officer", task.PrimaryOfficerName);
+        Assert.Equal(officer.Id, task.PrimaryAssigneeId);
+        Assert.Equal("Former officer", task.PrimaryAssigneeName);
         Assert.Equal(division.Name, task.DivisionName);
         Assert.Equal(due, task.DueAtUtc);
         Assert.Equal("BB", task.Type);
@@ -80,7 +80,7 @@ public sealed class ReportingCycleLookupTests
         db.AddRange(division, actor, officer, report, other, role, permission,
             new UserRole { UserId = actor.Id, RoleId = role.Id, DivisionId = division.Id, ReportDefinitionId = report.Id },
             new RolePermission { RoleId = role.Id, PermissionId = permission.Id });
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); await AccessControlSeed.PrepareAsync(db,true); await db.SaveChangesAsync();
         return (actor.Id, report, other, officer, division);
     }
     private sealed record Actor(Guid UserId) : ICurrentUser;

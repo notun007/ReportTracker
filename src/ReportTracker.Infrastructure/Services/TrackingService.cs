@@ -19,16 +19,19 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
         var end = start.AddDays(1);
         var query = access.AuthorizedObligations().AsNoTracking().Where(x => x.ExceptionStatus == ExceptionStatus.None);
         var pending = query.Where(x => x.SendingStatus != SendingStatus.Sent);
-        var myPending = await pending.CountAsync(x => x.PrimaryOfficerId == access.UserId || x.DeputyOfficerId == access.UserId, ct);
+        var assignedIds = access.AssignedObligations().Select(x => x.Id);
+        var myPending = await pending.CountAsync(x => assignedIds.Contains(x.Id), ct);
         var dueToday = await pending.CountAsync(x => x.EffectiveDueAtUtc >= start && x.EffectiveDueAtUtc < end, ct);
         var overdue = await pending.CountAsync(x => x.EffectiveDueAtUtc < now, ct);
         var evidencePending = await query.CountAsync(x => x.EvidenceStatus == EvidenceStatus.Missing || x.EvidenceStatus == EvidenceStatus.Provided || x.EvidenceStatus == EvidenceStatus.Rejected, ct);
         // Fetch all authorized rows so client filters and totals describe the same collection.
         var rows = await query.Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition)
             .Include(x => x.SendingEvents).OrderBy(x => x.EffectiveDueAtUtc).ThenBy(x => x.Id).ToListAsync(ct);
-        var owners = await db.Users.AsNoTracking().Where(x => rows.Select(r => r.PrimaryOfficerId).Contains(x.Id))
+        var owners = await db.Users.AsNoTracking().Where(x => rows.Select(r => r.PrimaryAssigneeId).Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, x => x.DisplayName, ct);
         var writable = await access.AuthorizedObligations(true).Select(x => x.Id).ToHashSetAsync(ct);
+        var assigned = await assignedIds.ToHashSetAsync(ct);
+        var incoming = await access.AssignedReceivingObligations().Select(x => x.Id).ToHashSetAsync(ct);
         var divisionIds = rows.SelectMany(x => new Guid?[] { x.AccountableDivisionId, x.ReceivingDivisionId })
             .Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
         var divisions = await db.Divisions.AsNoTracking().Where(x => divisionIds.Contains(x.Id))
@@ -36,8 +39,8 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
         var readiness = await LoadReadinessAsync(rows, ct);
         var readyForSubmission = rows.Count(x => x.Type == ObligationType.External && x.SendingStatus != SendingStatus.Sent &&
             readiness.TryGetValue(x.Id, out var value) && value.Completed == value.Required);
-        var upcoming = rows.Select(x => ToDto(x, owners.GetValueOrDefault(x.PrimaryOfficerId ?? Guid.Empty, "Unassigned"), writable.Contains(x.Id), now, access.UserId,
-            readiness.GetValueOrDefault(x.Id), divisions)).ToList();
+        var upcoming = rows.Select(x => ToDto(x, owners.GetValueOrDefault(x.PrimaryAssigneeId ?? Guid.Empty, "Unassigned"), writable.Contains(x.Id), now, assigned.Contains(x.Id),
+            readiness.GetValueOrDefault(x.Id), divisions, incoming.Contains(x.Id))).ToList();
         var performance = Enum.GetValues<SendingStatus>().Select(status => new StatusCountDto(Label(status), rows.Count(x => x.SendingStatus == status))).ToList();
         return new(myPending, dueToday, overdue, readyForSubmission, evidencePending, upcoming, performance);
     }
@@ -48,12 +51,13 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
         var row = await access.AuthorizedObligations().AsNoTracking().Include(x => x.ReportCycle).ThenInclude(x => x.ReportDefinition)
             .Include(x => x.SendingEvents).FirstOrDefaultAsync(x => x.Id == id, ct);
         if (row is null) return null;
-        var owner = await db.Users.Where(x => x.Id == row.PrimaryOfficerId).Select(x => x.DisplayName).FirstOrDefaultAsync(ct);
+        var owner = await db.Users.Where(x => x.Id == row.PrimaryAssigneeId).Select(x => x.DisplayName).FirstOrDefaultAsync(ct);
         var divisionIds = new Guid?[] { row.AccountableDivisionId, row.ReceivingDivisionId }.Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
         var divisions = await db.Divisions.AsNoTracking().Where(x => divisionIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
         var readiness = await LoadReadinessAsync([row], ct);
-        return ToDto(row, owner ?? "Unassigned", await access.AuthorizedObligations(true).AnyAsync(x => x.Id == id, ct), DateTime.UtcNow, access.UserId,
-            readiness.GetValueOrDefault(row.Id), divisions);
+        return ToDto(row, owner ?? "Unassigned", await access.AuthorizedObligations(true).AnyAsync(x => x.Id == id, ct), DateTime.UtcNow,
+            await access.AssignedObligations().AnyAsync(x => x.Id == id, ct),
+            readiness.GetValueOrDefault(row.Id), divisions, await access.AssignedReceivingObligations().AnyAsync(x => x.Id == id, ct));
     }
 
     public async Task<bool> RecordSendingAsync(Guid obligationId, RecordSendingCommand command, CancellationToken ct)
@@ -111,8 +115,8 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
         }).ToList();
     }
 
-    private static ObligationListItemDto ToDto(TrackingObligation row, string owner, bool writable, DateTime now, Guid userId,
-        (int Required, int Completed, IReadOnlyList<PendingComponentDto> Pending)? readiness, IReadOnlyDictionary<Guid, string> divisions)
+    private static ObligationListItemDto ToDto(TrackingObligation row, string owner, bool writable, DateTime now, bool assigned,
+        (int Required, int Completed, IReadOnlyList<PendingComponentDto> Pending)? readiness, IReadOnlyDictionary<Guid, string> divisions, bool incoming)
     {
         var actual = row.SendingStatus == SendingStatus.Sent
             ? row.SendingEvents.Where(x => !x.IsReversed && !x.IsPartial).Select(x => (DateTime?)x.ActualSentAtUtc).Max() : null;
@@ -122,10 +126,11 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
             Label(row.SendingStatus), Label(row.ReceiptStatus), Label(row.EvidenceStatus), RecipientDisplay(row, divisions),
             Convert.ToBase64String(row.RowVersion), writable && row.SendingStatus != SendingStatus.Sent && row.ExceptionStatus == ExceptionStatus.None &&
                 (row.Type != ObligationType.External || readiness is { } state && state.Required == state.Completed),
-            row.PrimaryOfficerId == userId || row.DeputyOfficerId == userId,
+            assigned,
             readiness?.Required ?? 0, readiness?.Completed ?? 0,
             row.Type == ObligationType.External && readiness is { } value && value.Required == value.Completed,
-            row.AccountableDivisionId, divisions.GetValueOrDefault(row.AccountableDivisionId, "Unknown division"), readiness?.Pending ?? []);
+            row.AccountableDivisionId, divisions.GetValueOrDefault(row.AccountableDivisionId, "Unknown division"), readiness?.Pending ?? [], incoming,
+            row.ReportCycle.ReportDefinitionId);
     }
 
     private static string RecipientDisplay(TrackingObligation row, IReadOnlyDictionary<Guid, string> divisions)

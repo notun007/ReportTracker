@@ -31,7 +31,9 @@ public sealed record ObligationListItemDto(
     bool IsReadyForSubmission,
     Guid DivisionId,
     string Division,
-    IReadOnlyList<PendingComponentDto> PendingComponents);
+    IReadOnlyList<PendingComponentDto> PendingComponents,
+    bool IsAssignedReceiver = false,
+    Guid ReportId = default);
 
 public sealed record PendingComponentDto(Guid Id, string Name, string SendingStatus, string ReceiptStatus, string EvidenceStatus);
 

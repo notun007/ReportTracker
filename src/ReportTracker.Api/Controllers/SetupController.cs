@@ -18,7 +18,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     public async Task<IActionResult> Lookups(CancellationToken ct)
     {
         await access.EnsureActiveAsync(ct);
-        if (!await access.Grants("reports.manage").AnyAsync(ct) && !await access.HasAsync("administration.manage", null, null, ct)) return Forbid();
+        if (!await access.ConfigurationGrants().AnyAsync(ct) && !await access.HasAsync("administration.manage", null, null, ct)) return Forbid();
         return Ok(new
         {
             Divisions = await db.Divisions.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => new LookupItem(x.Id, x.Name)).ToListAsync(ct),
@@ -31,7 +31,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     public async Task<IActionResult> Reports(CancellationToken ct)
     {
         await access.EnsureActiveAsync(ct);
-        var grants = access.Grants("reports.manage");
+        var grants = access.ConfigurationGrants();
         var reports = await db.ReportDefinitions.AsNoTracking().Where(x => grants.Any(g =>
                 (!g.DivisionId.HasValue || g.DivisionId == x.OwnerDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.Id)))
             .OrderBy(x => x.Name).Select(x => new
@@ -56,7 +56,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         return Ok(reports.Select(x => { var sender = assignments.FirstOrDefault(a => a.ReportDefinitionId == x.Id && a.DivisionId == x.SubmittingDivisionId);
             return new ReportItem(x.Id, x.Code, x.Name, x.OwnerDivisionId, x.BbRecipient, (x.Version?.Frequency ?? default).ToString(), x.CycleCount,
                 x.ReportTypeId, x.ReportTypeName,
-                x.SubmittingDivisionId, sender?.PrimaryOfficerId, sender?.DeputyOfficerId, x.ReceivingDivisionId,
+                x.SubmittingDivisionId, sender?.PrimaryAssigneeId, sender?.AlternateAssigneeId, x.ReceivingDivisionId,
                 x.SubmissionRecipientId, x.Departments.Select(d => d.DepartmentId).ToArray(),
                 ReportDefinition.FormatSubmissionDestination(x.RecipientName, x.Departments.Select(d => d.Name)),
                 x.Version?.DueTime, x.Version?.ComponentDeadlineOffsetDays, x.Version?.TimeZoneId,
@@ -76,7 +76,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         if (recipient is null && (string.IsNullOrWhiteSpace(request.BbRecipient) || request.SubmissionDepartmentIds is { Count: > 0 }))
             throw new TrackingValidationException("Choose a submission recipient and its departments.");
         await ValidateResponsibilities(new ReportResponsibilitiesRequest(request.OwnerDivisionId, request.SubmittingDivisionId ?? Guid.Empty,
-            request.PrimarySubmittingOfficerId ?? Guid.Empty, request.DeputySubmittingOfficerId), ct);
+            request.PrimarySubmittingAssigneeId ?? Guid.Empty, request.AlternateSubmittingAssigneeId), ct, allowUnassigned: true);
         if (!Enum.TryParse<Frequency>(request.Frequency, out var frequency) || !Enum.IsDefined(frequency)) throw new TrackingValidationException("Choose a valid reporting frequency.");
         if (request.ReportDeadlineOffsetDays is < 0 or > 365) throw new TrackingValidationException("Report deadline days must be between 0 and 365 calendar days after period end.");
         if (request.ComponentDeadlineOffsetDays is < 0 or > 365) throw new TrackingValidationException("Deadline lead days must be between 0 and 365 days.");
@@ -88,13 +88,13 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         {
             var component = components[i];
             if (component is null) throw new TrackingValidationException("Every component must contain its configuration.");
-            if (component.Contributors is not null)
+            if (component.Contributors is { Count: > 0 })
             {
                 var (primary, deputy) = await ComponentValidation.ValidateContributorsAsync(db, component.ProviderDivisionId, component.Contributors, ct);
-                components[i] = component = component with { PrimaryOfficerId = primary!.Value, DeputyOfficerId = deputy };
+                components[i] = component = component with { PrimaryAssigneeId = primary!.Value, AlternateAssigneeId = deputy };
             }
             await ComponentValidation.ValidateAsync(db, component.Name, component.Description, component.ProviderDivisionId,
-                request.ReceivingDivisionId.Value, component.PrimaryOfficerId, component.DeputyOfficerId, request.ComponentDeadlineOffsetDays, ct);
+                request.ReceivingDivisionId.Value, component.PrimaryAssigneeId, component.AlternateAssigneeId, request.ComponentDeadlineOffsetDays, ct, allowUnassigned: true);
         }
         if (components.Select(x => x.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != components.Count)
             throw new TrackingValidationException("Component names must be unique within a report.");
@@ -122,15 +122,16 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         {
             var component = new ComponentDefinition { DefinitionVersionId = version.Id, Name = item.Name.Trim(), Description = item.Description?.Trim(),
                 ProviderDivisionId = item.ProviderDivisionId,
-                PrimaryOfficerId = item.PrimaryOfficerId, ReceivingDivisionId = request.ReceivingDivisionId.Value,
-                ContributorsJson = JsonSerializer.Serialize(item.Contributors ?? ComponentValidation.Contributors(null, item.PrimaryOfficerId, item.DeputyOfficerId)),
+                PrimaryAssigneeId = item.PrimaryAssigneeId, ReceivingDivisionId = request.ReceivingDivisionId.Value,
+                ContributorsJson = JsonSerializer.Serialize(item.Contributors ?? ComponentValidation.Contributors(null, item.PrimaryAssigneeId, item.AlternateAssigneeId)),
                 DeadlineRuleJson = JsonSerializer.Serialize(new { offsetDays = request.ComponentDeadlineOffsetDays }) };
             db.ComponentDefinitions.Add(component);
             Audit(nameof(ComponentDefinition), component.Id, "ComponentCreated", new { reportId = report.Id, component.Name, component.ProviderDivisionId });
         }
-        db.ResponsibilityAssignments.Add(new ResponsibilityAssignment { ReportDefinitionId = report.Id, DivisionId = request.SubmittingDivisionId!.Value,
-            PrimaryOfficerId = request.PrimarySubmittingOfficerId!.Value, DeputyOfficerId = request.DeputySubmittingOfficerId,
-            ResponsibilityType = "MainSender", EffectiveFromUtc = DateTime.UtcNow });
+        if (request.PrimarySubmittingAssigneeId is Guid primaryAssigneeId && primaryAssigneeId != Guid.Empty)
+            db.ResponsibilityAssignments.Add(new ResponsibilityAssignment { ReportDefinitionId = report.Id, DivisionId = request.SubmittingDivisionId!.Value,
+                PrimaryAssigneeId = primaryAssigneeId, AlternateAssigneeId = request.AlternateSubmittingAssigneeId,
+                ResponsibilityType = "MainSender", EffectiveFromUtc = DateTime.UtcNow });
         Audit(nameof(ReportDefinition), report.Id, "ReportCreated", new { report.Code, report.Name, report.SubmissionRecipientId,
             request.SubmissionDepartmentIds, request.ReportDeadlineOffsetDays, request.ComponentDeadlineOffsetDays });
         await db.SaveChangesAsync(ct);
@@ -177,9 +178,9 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     {
         var report = await db.ReportDefinitions.FirstOrDefaultAsync(x => x.Id == reportId && x.IsActive, ct);
         if (report is null) return NotFound();
-        await access.RequireAsync("reports.manage", report.OwnerDivisionId, reportId, ct);
+        await access.RequireAsync(AccessPermissions.Responsibilities, report.OwnerDivisionId, reportId, ct);
         if (request.CoordinatingDivisionId != report.OwnerDivisionId)
-            await access.RequireAsync("reports.manage", request.CoordinatingDivisionId, reportId, ct);
+            await access.RequireAsync(AccessPermissions.Responsibilities, request.CoordinatingDivisionId, reportId, ct);
         await ValidateResponsibilities(request, ct);
         var now = DateTime.UtcNow;
         var assignments = await db.ResponsibilityAssignments.Where(x => x.ReportDefinitionId == reportId && x.ResponsibilityType == "MainSender" &&
@@ -188,23 +189,29 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         var previousCoordinating = report.OwnerDivisionId; var previousSubmitting = report.SubmittingDivisionId;
         report.OwnerDivisionId = request.CoordinatingDivisionId; report.SubmittingDivisionId = request.SubmittingDivisionId;
         db.ResponsibilityAssignments.Add(new ResponsibilityAssignment { ReportDefinitionId = reportId, DivisionId = request.SubmittingDivisionId,
-            PrimaryOfficerId = request.PrimarySubmittingOfficerId, DeputyOfficerId = request.DeputySubmittingOfficerId,
+            PrimaryAssigneeId = request.PrimarySubmittingAssigneeId, AlternateAssigneeId = request.AlternateSubmittingAssigneeId,
             ResponsibilityType = "MainSender", EffectiveFromUtc = now });
         Audit(nameof(ReportDefinition), reportId, "ReportResponsibilitiesChanged", new { previousCoordinating, previousSubmitting, request });
         await db.SaveChangesAsync(ct);
         return NoContent();
     }
 
-    private async Task ValidateResponsibilities(ReportResponsibilitiesRequest request, CancellationToken ct)
+    private async Task ValidateResponsibilities(ReportResponsibilitiesRequest request, CancellationToken ct, bool allowUnassigned = false)
     {
         if (!await db.Divisions.AnyAsync(x => x.Id == request.CoordinatingDivisionId && x.IsActive, ct) ||
             !await db.Divisions.AnyAsync(x => x.Id == request.SubmittingDivisionId && x.IsActive, ct))
             throw new TrackingValidationException("Choose active coordinating and final submitting divisions.");
-        if (!await db.Users.AnyAsync(x => x.Id == request.PrimarySubmittingOfficerId && x.DivisionId == request.SubmittingDivisionId && x.IsActive, ct) ||
-            (request.DeputySubmittingOfficerId.HasValue && !await db.Users.AnyAsync(x => x.Id == request.DeputySubmittingOfficerId && x.DivisionId == request.SubmittingDivisionId && x.IsActive, ct)))
-            throw new TrackingValidationException("Final submitting officers must be active members of the final submitting division.");
-        if (request.DeputySubmittingOfficerId == request.PrimarySubmittingOfficerId)
-            throw new TrackingValidationException("Choose a different deputy submitting officer.");
+        if (allowUnassigned && request.PrimarySubmittingAssigneeId == Guid.Empty)
+        {
+            if (request.AlternateSubmittingAssigneeId.HasValue)
+                throw new TrackingValidationException("Choose a primary submitting assignee before assigning an alternate assignee.");
+            return;
+        }
+        if (!await db.Users.AnyAsync(x => x.Id == request.PrimarySubmittingAssigneeId && x.DivisionId == request.SubmittingDivisionId && x.IsActive, ct) ||
+            (request.AlternateSubmittingAssigneeId.HasValue && !await db.Users.AnyAsync(x => x.Id == request.AlternateSubmittingAssigneeId && x.DivisionId == request.SubmittingDivisionId && x.IsActive, ct)))
+            throw new TrackingValidationException("Final submitting assignees must be active members of the final submitting division.");
+        if (request.AlternateSubmittingAssigneeId == request.PrimarySubmittingAssigneeId)
+            throw new TrackingValidationException("Choose a different alternate submitting assignee.");
     }
 
     [HttpGet("reports/{reportId:guid}/cycles")]
@@ -212,11 +219,11 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     {
         var report = await db.ReportDefinitions.AsNoTracking().FirstOrDefaultAsync(x => x.Id == reportId && x.IsActive, ct);
         if (report is null) return NotFound();
-        await access.RequireAsync("reports.manage", report.OwnerDivisionId, reportId, ct);
+        await access.RequireAsync(AccessPermissions.Cycles, report.OwnerDivisionId, reportId, ct);
         var cycles = await db.ReportCycles.AsNoTracking().Where(x => x.ReportDefinitionId == reportId)
             .Include(x => x.Obligations).OrderByDescending(x => x.PeriodStart).ThenBy(x => x.PeriodKey).ToListAsync(ct);
         var obligations = cycles.SelectMany(x => x.Obligations).ToList();
-        var officerIds = obligations.SelectMany(x => new[] { x.PrimaryOfficerId, x.DeputyOfficerId })
+        var officerIds = obligations.SelectMany(x => new[] { x.PrimaryAssigneeId, x.AlternateAssigneeId })
             .Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
         var divisionIds = obligations.SelectMany(x => new Guid?[] { x.AccountableDivisionId, x.ReceivingDivisionId })
             .Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
@@ -226,10 +233,10 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
             cycle.Obligations.OrderBy(x => x.Type == ObligationType.External ? 0 : 1).ThenBy(x => x.Name).Select(x =>
                 new CycleObligationItem(TrackingRules.ObligationDisplayName(x.Type, x.Name), x.Type == ObligationType.External ? "BB" : x.Type.ToString(),
                     x.AccountableDivisionId, divisions.GetValueOrDefault(x.AccountableDivisionId, "Unknown division"),
-                    x.PrimaryOfficerId, officers.GetValueOrDefault(x.PrimaryOfficerId ?? Guid.Empty),
-                    x.DeputyOfficerId, officers.GetValueOrDefault(x.DeputyOfficerId ?? Guid.Empty), DisplayRecipient(x, divisions),
+                    x.PrimaryAssigneeId, officers.GetValueOrDefault(x.PrimaryAssigneeId ?? Guid.Empty),
+                    x.AlternateAssigneeId, officers.GetValueOrDefault(x.AlternateAssigneeId ?? Guid.Empty), DisplayRecipient(x, divisions),
                     x.EffectiveDueAtUtc, x.ReceiptStatus != ReceiptStatus.NotRequired, x.EvidenceStatus != EvidenceStatus.NotRequired, x.ReceivingDivisionId,
-                    x.Type == ObligationType.Internal ? ComponentValidation.Contributors(x.ContributorsJson, x.PrimaryOfficerId, x.DeputyOfficerId) : null)).ToList())).ToList());
+                    x.Type == ObligationType.Internal ? ComponentValidation.Contributors(x.ContributorsJson, x.PrimaryAssigneeId, x.AlternateAssigneeId) : null)).ToList())).ToList());
     }
 
     [HttpPost("reports/{reportId:guid}/cycles")]
@@ -239,7 +246,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
             .Include(x => x.SubmissionDepartments).ThenInclude(x => x.Department)
             .FirstOrDefaultAsync(x => x.Id == reportId && x.IsActive, ct);
         if (report is null) return NotFound();
-        await access.RequireAsync("reports.manage", report.OwnerDivisionId, reportId, ct);
+        await access.RequireAsync(AccessPermissions.Cycles, report.OwnerDivisionId, reportId, ct);
         if (request.PeriodStart == default || request.PeriodEnd < request.PeriodStart) throw new TrackingValidationException("Enter a valid reporting period.");
         var reportingYear = request.ReportingYear ?? request.PeriodStart.Year;
         if (reportingYear is < 2000 or > 9998 || request.PeriodStart.Year != reportingYear || request.PeriodEnd.Year != reportingYear)
@@ -284,11 +291,11 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
             if (item.Type is not ("Internal" or "BB") || item.DueAtUtc.Kind != DateTimeKind.Utc || item.DueAtUtc < new DateTime(2000, 1, 1))
                 throw new TrackingValidationException("Each obligation needs a valid type and deadline in UTC.");
             if (!await db.Divisions.AnyAsync(x => x.Id == item.DivisionId && x.IsActive, ct) ||
-                !await db.Users.AnyAsync(x => x.Id == item.PrimaryOfficerId && x.DivisionId == item.DivisionId && x.IsActive, ct) ||
-                (item.DeputyOfficerId.HasValue && !await db.Users.AnyAsync(x => x.Id == item.DeputyOfficerId && x.DivisionId == item.DivisionId && x.IsActive, ct)))
-                throw new TrackingValidationException("Primary and deputy officers must be active members of the accountable division.");
+                !await db.Users.AnyAsync(x => x.Id == item.PrimaryAssigneeId && x.DivisionId == item.DivisionId && x.IsActive, ct) ||
+                (item.AlternateAssigneeId.HasValue && !await db.Users.AnyAsync(x => x.Id == item.AlternateAssigneeId && x.DivisionId == item.DivisionId && x.IsActive, ct)))
+                throw new TrackingValidationException("Primary and alternate assignees must be active members of the accountable division.");
             var obligation = new TrackingObligation { ReportCycleId = cycle.Id, Type = item.Type == "BB" ? ObligationType.External : ObligationType.Internal,
-                Name = item.Name.Trim(), AccountableDivisionId = item.DivisionId, PrimaryOfficerId = item.PrimaryOfficerId, DeputyOfficerId = item.DeputyOfficerId,
+                Name = item.Name.Trim(), AccountableDivisionId = item.DivisionId, PrimaryAssigneeId = item.PrimaryAssigneeId, AlternateAssigneeId = item.AlternateAssigneeId,
                 Recipient = item.Type == "BB" && report.SubmissionRecipientId.HasValue ? report.SubmissionDestination() : item.Recipient.Trim(),
                 ReceivingDivisionId = receivingDivision, OriginalDueAtUtc = item.DueAtUtc, EffectiveDueAtUtc = item.DueAtUtc,
                 ReceiptStatus = item.ReceiptRequired ? ReceiptStatus.AwaitingConfirmation : ReceiptStatus.NotRequired,
@@ -336,18 +343,20 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     [HttpGet("users")]
     public async Task<IActionResult> Users(CancellationToken ct)
     {
-        await access.RequireAsync("administration.manage", null, null, ct);
+        await access.EnsureActiveAsync(ct);
+        if (!await access.HasAsync(AccessPermissions.Users,null,null,ct) && !await access.HasAsync(AccessPermissions.Roles,null,null,ct)) return Forbid();
         var users = await db.Users.AsNoTracking().OrderBy(x => x.DisplayName).ToListAsync(ct);
         var roles = await (from assignment in db.UserRoles join role in db.Roles on assignment.RoleId equals role.Id
+                           where assignment.IsActive && role.IsActive
                            select new { assignment.UserId, role.Name }).ToListAsync(ct);
         return Ok(users.Select(x => new UserItem(x.Id, x.EmployeeId, x.DisplayName, x.Email, x.MobileNumber, x.DivisionId, x.IsActive,
-            roles.Where(r => r.UserId == x.Id).Select(r => r.Name).ToArray())));
+            roles.Where(r => r.UserId == x.Id).Select(r => r.Name).Distinct().ToArray(), Convert.ToBase64String(x.RowVersion))));
     }
 
     [HttpPost("users")]
     public async Task<IActionResult> CreateUser(CreateUserRequest request, CancellationToken ct)
     {
-        await access.RequireAsync("administration.manage", null, null, ct);
+        await access.RequireAsync(AccessPermissions.Users, null, null, ct);
         if (!await db.Divisions.AnyAsync(x => x.Id == request.DivisionId && x.IsActive, ct)) throw new TrackingValidationException("Choose an active division.");
         var employeeId = request.EmployeeId.Trim();
         var normalizedEmployeeId = employeeId.ToUpperInvariant();
@@ -360,33 +369,62 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
             Email = email, MobileNumber = request.MobileNumber?.Trim(), DivisionId = request.DivisionId };
         db.Users.Add(user);
         db.LocalCredentials.Add(new LocalCredential { UserId = user.Id, PasswordHash = hasher.HashPassword(user, request.Password) });
-        if (request.IsCoordinator)
+        var assignments = request.RoleAssignments?.ToList() ?? [];
+        if (request.RoleAssignments is null && request.IsCoordinator)
         {
-            var role = await db.Roles.SingleAsync(x => x.Name == "Report Coordinator", ct);
-            db.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = role.Id, DivisionId = request.DivisionId });
+            var role = await db.Roles.SingleAsync(x => x.Code == "REPORT_ADMIN", ct);
+            assignments.Add(new(role.Id,"Division",request.DivisionId));
+        }
+        if (assignments.Count > 0)
+        {
+            await access.RequireAsync(AccessPermissions.Roles,null,null,ct);
+            var administration=new AccessAdministration(db,access);
+            await administration.ValidateAssignmentsAsync(assignments,ct);
+            await administration.ReplaceAssignmentsAsync(user,assignments,ct);
         }
         Audit(nameof(AppUser), user.Id, "UserCreated", new { user.EmployeeId, user.DivisionId, request.IsCoordinator });
         await db.SaveChangesAsync(ct);
         return Created($"/api/setup/users/{user.Id}", new { user.Id });
     }
 
+    [HttpPut("users/{userId:guid}")]
+    public async Task<IActionResult> UpdateUser(Guid userId,UpdateAccessUserRequest request,CancellationToken ct)
+    {
+        await access.RequireAsync(AccessPermissions.Users,null,null,ct);
+        var user=await db.Users.SingleOrDefaultAsync(x => x.Id == userId,ct); if (user is null) return NotFound();
+        AccessAdministration.CheckVersion(user,request.RowVersion);
+        var name=request.DisplayName.Trim(); var email=request.Email.Trim().ToLowerInvariant();
+        if (name.Length == 0) throw new TrackingValidationException("Enter a display name.");
+        if (!await db.Divisions.AnyAsync(x => x.Id == request.DivisionId && x.IsActive,ct)) throw new TrackingValidationException("Choose an active division.");
+        if (await db.Users.AnyAsync(x => x.Id != userId && x.Email.ToLower() == email,ct)) return DuplicateUser("email","An account with this email address already exists.");
+        var previous=new { user.DisplayName,user.Email,user.MobileNumber,user.DivisionId };
+        user.DisplayName=name; user.Email=email; user.MobileNumber=request.MobileNumber?.Trim(); user.DivisionId=request.DivisionId;
+        Audit(nameof(AppUser),userId,"UserProfileChanged",new { Previous=previous,user.DisplayName,user.Email,user.MobileNumber,user.DivisionId });
+        await db.SaveChangesAsync(ct); return NoContent();
+    }
+
     [HttpPatch("users/{userId:guid}/status")]
     public async Task<IActionResult> ChangeUserStatus(Guid userId, ChangeUserStatusRequest request, CancellationToken ct)
     {
-        await access.RequireAsync("administration.manage", null, null, ct);
+        await access.RequireAsync(AccessPermissions.Users, null, null, ct);
+        var administration=new AccessAdministration(db,access);
+        await using var transaction=await administration.BeginMutationAsync(ct);
+        await access.RequireAsync(AccessPermissions.Users,null,null,ct);
         if (userId == access.UserId && !request.IsActive) throw new TrackingConflictException("You cannot deactivate your own active session.");
         var user = await db.Users.FirstOrDefaultAsync(x => x.Id == userId, ct);
         if (user is null) return NotFound();
+        if (!request.IsActive) await administration.EnsureAdministratorRemainsAsync(ct,deactivatedUserId:userId);
         user.IsActive = request.IsActive;
         Audit(nameof(AppUser), userId, request.IsActive ? "UserActivated" : "UserDeactivated", new { user.EmployeeId });
         await db.SaveChangesAsync(ct);
+        if (transaction is not null) await transaction.CommitAsync(ct);
         return NoContent();
     }
 
     [HttpPost("users/{userId:guid}/reset-password")]
     public async Task<IActionResult> ResetPassword(Guid userId, ResetPasswordRequest request, CancellationToken ct)
     {
-        await access.RequireAsync("administration.manage", null, null, ct);
+        await access.RequireAsync(AccessPermissions.Users, null, null, ct);
         var user = await db.Users.FirstOrDefaultAsync(x => x.Id == userId, ct);
         if (user is null) return NotFound();
         var credential = await db.LocalCredentials.FirstOrDefaultAsync(x => x.UserId == userId, ct);
@@ -400,7 +438,8 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     [HttpGet("divisions")]
     public async Task<ActionResult<IReadOnlyList<DivisionItem>>> Divisions(CancellationToken ct)
     {
-        await access.RequireAsync("administration.manage", null, null, ct);
+        await access.EnsureActiveAsync(ct);
+        if (!await access.HasAsync(AccessPermissions.Divisions,null,null,ct) && !await access.HasAsync(AccessPermissions.Users,null,null,ct) && !await access.HasAsync(AccessPermissions.Roles,null,null,ct)) return Forbid();
         return Ok(await db.Divisions.AsNoTracking().OrderBy(x => x.Name)
             .Select(x => new DivisionItem(x.Id, x.Code, x.Name, x.IsActive)).ToListAsync(ct));
     }
@@ -408,7 +447,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     [HttpPost("divisions")]
     public async Task<IActionResult> CreateDivision(CreateDivisionRequest request, CancellationToken ct)
     {
-        await access.RequireAsync("administration.manage", null, null, ct);
+        await access.RequireAsync(AccessPermissions.Divisions, null, null, ct);
         var code = request.Code.Trim().ToUpperInvariant();
         // Treat an existing code as a normal validation outcome, before attempting a database insert.
         if (await db.Divisions.AsNoTracking().AnyAsync(x => x.Code == code, ct))

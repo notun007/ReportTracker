@@ -69,6 +69,6 @@ public sealed class AutomationController(ICycleGenerationService generator, Trac
         }
         var report = await db.ReportDefinitions.AsNoTracking().SingleOrDefaultAsync(x => x.Id == reportId.Value, ct)
             ?? throw new TrackingValidationException("Choose an active report.");
-        await access.RequireAsync("reports.manage", report.OwnerDivisionId, report.Id, ct);
+        await access.RequireAsync(AccessPermissions.Cycles, report.OwnerDivisionId, report.Id, ct);
     }
 }

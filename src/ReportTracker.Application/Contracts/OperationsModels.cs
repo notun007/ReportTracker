@@ -7,7 +7,12 @@ public sealed record EvidenceItem(Guid Id, Guid TrackingObligationId, string Ori
     Guid UploadedByUserId = default, bool CanReview = false);
 public sealed record ObligationActions(bool CanUploadEvidence, bool CanConfirmReceipt, bool CanReviewEvidence, bool CanAmendStatus,
     bool IsExternalReceipt, bool HasSending, Guid? ReceivingDivisionId, string? ReceivingDivisionName, bool CanAssignReceiver,
-    IReadOnlyList<LookupItem> ReceivingDivisions);
+    IReadOnlyList<LookupItem> ReceivingDivisions, bool CanManageReceivingOfficers = false);
+
+public sealed record ReceivingOfficerDirectory(Guid ReportId, Guid DivisionId, string Division,
+    IReadOnlyList<LookupItem> Officers, IReadOnlyList<Guid> SelectedOfficerIds, string RowVersion);
+public sealed record SetReceivingOfficersRequest(Guid DivisionId, [Required, MaxLength(50)] IReadOnlyList<Guid> OfficerIds,
+    [Required] string RowVersion);
 public sealed record AssignReceivingDivisionRequest(Guid ReceivingDivisionId);
 public sealed record EvidenceDecisionRequest([Required] string Decision, [StringLength(1000)] string? Reason);
 

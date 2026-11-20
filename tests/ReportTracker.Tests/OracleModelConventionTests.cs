@@ -47,5 +47,14 @@ public sealed class OracleModelConventionTests
         var version = db.Model.FindEntityType(typeof(DefinitionVersion))!;
         Assert.Equal("DATE", version.FindProperty(nameof(DefinitionVersion.EffectiveFrom))!.GetColumnType());
         Assert.Equal("INTERVAL DAY(0) TO SECOND(6)", version.FindProperty(nameof(DefinitionVersion.DueTime))!.GetColumnType());
+
+        foreach (var type in new[] { typeof(ComponentDefinition), typeof(TrackingObligation), typeof(ResponsibilityAssignment) })
+        {
+            var entity = db.Model.FindEntityType(type)!;
+            Assert.Equal("primary_assignee_id", entity.FindProperty("PrimaryAssigneeId")!.GetColumnName());
+            Assert.Equal("alternate_assignee_id", entity.FindProperty("AlternateAssigneeId")!.GetColumnName());
+            Assert.Null(entity.FindProperty("PrimaryOfficerId"));
+            Assert.Null(entity.FindProperty("DeputyOfficerId"));
+        }
     }
 }

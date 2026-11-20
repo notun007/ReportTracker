@@ -77,8 +77,8 @@ public sealed class ComponentDefinition : Entity
     public required string Name { get; set; }
     public string? Description { get; set; }
     public Guid ProviderDivisionId { get; set; }
-    public Guid? PrimaryOfficerId { get; set; }
-    public Guid? DeputyOfficerId { get; set; }
+    public Guid? PrimaryAssigneeId { get; set; }
+    public Guid? AlternateAssigneeId { get; set; }
     public Guid ReceivingDivisionId { get; set; }
     public string? DeadlineRuleJson { get; set; }
     public string? ContributorsJson { get; set; }
@@ -108,8 +108,8 @@ public sealed class TrackingObligation : Entity
     public required string Name { get; set; }
     public Guid AccountableDivisionId { get; set; }
     public Guid? ReceivingDivisionId { get; set; }
-    public Guid? PrimaryOfficerId { get; set; }
-    public Guid? DeputyOfficerId { get; set; }
+    public Guid? PrimaryAssigneeId { get; set; }
+    public Guid? AlternateAssigneeId { get; set; }
     public required string Recipient { get; set; }
     public DateTime OriginalDueAtUtc { get; set; }
     public DateTime EffectiveDueAtUtc { get; set; }

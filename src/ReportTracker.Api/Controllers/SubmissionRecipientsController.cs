@@ -16,7 +16,7 @@ public sealed class SubmissionRecipientsController(ReportTrackerDbContext db, Tr
     public async Task<ActionResult<IReadOnlyList<SubmissionRecipientItem>>> List(CancellationToken ct)
     {
         await access.EnsureActiveAsync(ct);
-        if (!await access.Grants("reports.manage").AnyAsync(ct) &&
+        if (!await access.ConfigurationGrants().AnyAsync(ct) &&
             !await access.HasAsync("administration.manage", null, null, ct)) return Forbid();
 
         return Ok(await db.SubmissionRecipients.AsNoTracking().OrderBy(x => x.Name)

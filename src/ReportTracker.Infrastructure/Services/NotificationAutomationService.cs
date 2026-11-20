@@ -36,8 +36,9 @@ internal sealed class NotificationAutomationService(ReportTrackerDbContext db, I
             if (!leadDays.Contains(days) && !(policy.DailyOverdueReminders && days < 0)) continue;
             var recipientRoles = policy.RecipientsCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var recipientIds = new List<Guid?>();
-            if (recipientRoles.Contains("Primary")) recipientIds.Add(obligation.PrimaryOfficerId);
-            if (recipientRoles.Contains("Deputy")) recipientIds.Add(obligation.DeputyOfficerId);
+            if (recipientRoles.Contains("Primary")) recipientIds.Add(obligation.PrimaryAssigneeId);
+            // Accept the legacy token while existing reminder policies are upgraded.
+            if (recipientRoles.Contains("Alternate") || recipientRoles.Contains("Deputy")) recipientIds.Add(obligation.AlternateAssigneeId);
             foreach (var userId in recipientIds.Where(x => x.HasValue).Select(x => x!.Value).Distinct())
             {
                 if (!users.TryGetValue(userId, out var user)) continue;

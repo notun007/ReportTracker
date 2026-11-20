@@ -10,6 +10,20 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
 {
     public async ValueTask<bool> TryHandleAsync(HttpContext context, Exception exception, CancellationToken cancellationToken)
     {
+        if (exception is OperationCanceledException)
+        {
+            await RequestCancellationResponse.HandleAsync(context, logger);
+            return true;
+        }
+        if (DatabaseConnectionFailure.IsUnavailable(exception))
+        {
+            logger.LogWarning(exception, "Database connection unavailable. TraceId: {TraceId}", context.TraceIdentifier);
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            DatabaseConnectionFailure.SetHeaders(context.Response);
+            await context.Response.WriteAsJsonAsync(DatabaseConnectionFailure.Problem(context),
+                options: null, contentType: "application/problem+json", cancellationToken: cancellationToken);
+            return true;
+        }
         var status = exception switch
         {
             DbUpdateConcurrencyException or TrackingConflictException => StatusCodes.Status409Conflict,

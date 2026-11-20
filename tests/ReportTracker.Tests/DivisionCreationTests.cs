@@ -98,7 +98,7 @@ public sealed class DivisionCreationTests
         db.AddRange(division, user, role, permission,
             new UserRole { UserId = user.Id, RoleId = role.Id },
             new RolePermission { RoleId = role.Id, PermissionId = permission.Id });
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); await AccessControlSeed.PrepareAsync(db, true); await db.SaveChangesAsync();
         return user.Id;
     }
 
