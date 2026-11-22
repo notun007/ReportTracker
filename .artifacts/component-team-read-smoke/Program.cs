@@ -18,7 +18,7 @@ foreach(var user in users){var access=new TrackingAccess(db,new Actor(user));
  if(await access.HasAsync(AccessPermissions.Roles,null,null,default)){
   var controller=new AccessManagementController(db,access);var catalog=(AccessCatalogDirectory)((OkObjectResult)(await controller.Catalog(default)).Result!).Value!;
   if(!new[]{"SYS_ADMIN","REPORT_ADMIN","REPORT_PREPARER","COMPONENT_RECEIVER","FINAL_SUBMITTER"}.All(c=>catalog.Roles.Any(r=>r.Code==c)))throw new Exception("Missing core roles");
-  foreach(var target in users){var result=(await controller.UserAccess(target,default)).Result;if(result is not OkObjectResult)throw new Exception("User access directory failed");}checkedAdmin=true;
+  foreach(var target in users){var mappingResult=(await controller.UserRoles(target,default)).Result;if(mappingResult is not OkObjectResult {Value:UserRoleMappingDirectory mapping})throw new Exception("Role mapping did not load");if(mapping.RoleIds.Distinct().Count()!=mapping.RoleIds.Count)throw new Exception("Duplicate role memberships");var result=(await controller.UserAccess(target,default)).Result;if(result is not OkObjectResult)throw new Exception("User access directory failed");}checkedAdmin=true;
  }
  if(await access.Grants(AccessPermissions.Teams).AnyAsync()){
   var response=await new ComponentTeamsController(db,access).Get(default);if(response.Result is not OkObjectResult)throw new Exception("Team directory failed");

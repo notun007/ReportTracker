@@ -141,6 +141,65 @@ public sealed class AccessManagementTests
         Assert.NotEqual(token,Convert.ToBase64String(role.RowVersion));
         await Assert.ThrowsAsync<TrackingConflictException>(()=>f.Controller.UpdateRole(role.Id,request,default));
     }
+    [Fact]
+    public async Task Checklist_maps_role_ids_without_exposing_scope_fields_and_preserves_legacy_bindings()
+    {
+        await using var f=await Fixture.Create();var preparer=f.Roles["REPORT_PREPARER"].Id;
+        var original=new UserRole{UserId=f.Member.Id,RoleId=preparer,DivisionId=f.Division.Id,ReportDefinitionId=f.Report.Id};f.Db.Add(original);await f.Db.SaveChangesAsync();
+        var receiver=f.Roles["COMPONENT_RECEIVER"].Id;
+        await f.Controller.SaveUserRoles(f.Member.Id,new([preparer,receiver],Convert.ToBase64String(f.Member.RowVersion)),default);
+        Assert.True(original.IsActive);Assert.Equal(f.Division.Id,original.DivisionId);Assert.Equal(f.Report.Id,original.ReportDefinitionId);
+        var added=await f.Db.UserRoles.SingleAsync(x=>x.UserId==f.Member.Id&&x.RoleId==receiver);Assert.Null(added.DivisionId);Assert.Null(added.ReportDefinitionId);
+        var result=Assert.IsType<UserRoleMappingDirectory>(Assert.IsType<OkObjectResult>((await f.Controller.UserRoles(f.Member.Id,default)).Result).Value);
+        Assert.Equal(2,result.RoleIds.Count);var json=System.Text.Json.JsonSerializer.Serialize(result);
+        Assert.DoesNotContain("Scope",json);Assert.DoesNotContain("DivisionId",json);Assert.DoesNotContain("ReportDefinitionId",json);
+        await f.Controller.SaveUserRoles(f.Member.Id,new([receiver],result.RowVersion),default);Assert.False(original.IsActive);
+    }
+    [Fact]
+    public async Task Checklist_rejects_stale_edits_and_preserves_history_on_reassignment()
+    {
+        await using var f=await Fixture.Create();var role=f.Roles["REPORT_PREPARER"].Id;var token=Convert.ToBase64String(f.Member.RowVersion);
+        await f.Controller.SaveUserRoles(f.Member.Id,new([role],token),default);
+        await Assert.ThrowsAsync<TrackingConflictException>(()=>f.Controller.SaveUserRoles(f.Member.Id,new([],token),default));
+        var grant=await f.Db.UserRoles.SingleAsync(x=>x.UserId==f.Member.Id);
+        await f.Controller.SaveUserRoles(f.Member.Id,new([],Convert.ToBase64String(f.Member.RowVersion)),default);Assert.False(grant.IsActive);
+        await f.Controller.SaveUserRoles(f.Member.Id,new([role],Convert.ToBase64String(f.Member.RowVersion)),default);Assert.True(grant.IsActive);Assert.Single(await f.Db.UserRoles.Where(x=>x.UserId==f.Member.Id).ToListAsync());
+        Assert.Equal(3,await f.Db.AuditEvents.CountAsync(x=>x.Action=="UserAccessChanged"));
+    }
+    [Fact]
+    public async Task Checklist_cannot_remove_the_last_administrator_or_be_used_by_an_unauthorized_user()
+    {
+        await using var f=await Fixture.Create();
+        await Assert.ThrowsAsync<TrackingConflictException>(()=>f.Controller.SaveUserRoles(f.Admin.Id,new([],Convert.ToBase64String(f.Admin.RowVersion)),default));
+        var limited=new AccessManagementController(f.Db,new TrackingAccess(f.Db,new Actor(f.Member.Id)));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>limited.UserRoles(f.Admin.Id,default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(()=>limited.SaveUserRoles(f.Member.Id,new([f.Roles["SYS_ADMIN"].Id],Convert.ToBase64String(f.Member.RowVersion)),default));
+        Assert.Empty(f.Db.AuditEvents);
+    }
+    [Fact]
+    public async Task Checklist_does_not_expose_unassigned_components_and_noop_does_not_rewrite_bindings()
+    {
+        await using var f=await Fixture.Create();var id=f.Roles["REPORT_PREPARER"].Id;
+        await f.Controller.SaveUserRoles(f.Member.Id,new([id],Convert.ToBase64String(f.Member.RowVersion)),default);
+        var access=new TrackingAccess(f.Db,new Actor(f.Member.Id));Assert.Empty(await access.AuthorizedObligations().ToListAsync());
+        var token=f.Member.RowVersion.ToArray();await f.Controller.SaveUserRoles(f.Member.Id,new([id],Convert.ToBase64String(token)),default);Assert.Equal(token,f.Member.RowVersion);Assert.Single(f.Db.AuditEvents);
+        f.Task.PrimaryAssigneeId=f.Member.Id;await f.Db.SaveChangesAsync();Assert.Single(await access.AuthorizedObligations().ToListAsync());
+    }
+    [Theory]
+    [InlineData("unknown")][InlineData("duplicate")][InlineData("inactive")][InlineData("empty-id")]
+    public async Task Checklist_rejects_invalid_new_role_selections(string scenario)
+    {
+        await using var f=await Fixture.Create();var role=f.Roles["REPORT_PREPARER"];if(scenario=="inactive"){role.IsActive=false;await f.Db.SaveChangesAsync();}
+        Guid[] selected=scenario=="unknown"?[Guid.NewGuid()]:scenario=="duplicate"?[role.Id,role.Id]:scenario=="empty-id"?[Guid.Empty]:[role.Id];
+        await Assert.ThrowsAsync<TrackingValidationException>(()=>f.Controller.SaveUserRoles(f.Member.Id,new(selected,Convert.ToBase64String(f.Member.RowVersion)),default));Assert.Empty(f.Db.AuditEvents);
+    }
+    [Fact]
+    public async Task Operational_role_applies_to_assigned_work_without_legacy_report_or_division_restrictions()
+    {
+        await using var f=await Fixture.Create();f.Db.UserRoles.Add(new(){UserId=f.Member.Id,RoleId=f.Roles["REPORT_PREPARER"].Id,DivisionId=Guid.NewGuid(),ReportDefinitionId=Guid.NewGuid()});await f.Db.SaveChangesAsync();
+        var access=new TrackingAccess(f.Db,new Actor(f.Member.Id));Assert.Empty(await access.AuthorizedObligations().ToListAsync());
+        f.Task.PrimaryAssigneeId=f.Member.Id;await f.Db.SaveChangesAsync();Assert.Single(await access.AuthorizedObligations().ToListAsync());Assert.Single(await access.AuthorizedObligations(true).ToListAsync());Assert.True(await access.HasAsync(AccessPermissions.Upload,f.Division.Id,f.Report.Id,default));
+    }
     private sealed record Actor(Guid UserId):ICurrentUser;
     private sealed class Fixture:IAsyncDisposable
     {

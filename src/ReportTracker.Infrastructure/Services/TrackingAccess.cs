@@ -29,9 +29,14 @@ public sealed class TrackingAccess(ReportTrackerDbContext db, ICurrentUser curre
         select assignment;
     public IQueryable<UserRole> ConfigurationGrants() => GrantsAny(AccessPermissions.Configuration);
 
-    public async Task<bool> HasAsync(string permission, Guid? divisionId, Guid? reportId, CancellationToken ct) =>
-        await Grants(permission).AnyAsync(x => (!x.DivisionId.HasValue || x.DivisionId == divisionId) &&
-                                               (!x.ReportDefinitionId.HasValue || x.ReportDefinitionId == reportId), ct);
+    public async Task<bool> HasAsync(string permission, Guid? divisionId, Guid? reportId, CancellationToken ct)
+    {
+        if (permission is AccessPermissions.ComponentRead or AccessPermissions.ComponentSubmit or AccessPermissions.Receive
+            or AccessPermissions.ReportRead or AccessPermissions.ReportSubmit or AccessPermissions.Upload)
+            return await Grants(permission).AnyAsync(ct);
+        return await Grants(permission).AnyAsync(x => (!x.DivisionId.HasValue || x.DivisionId == divisionId) &&
+            (!x.ReportDefinitionId.HasValue || x.ReportDefinitionId == reportId), ct);
+    }
 
     public IQueryable<TrackingObligation> AssignedObligations(bool includeContributors = true)
     {
@@ -72,8 +77,8 @@ public sealed class TrackingAccess(ReportTrackerDbContext db, ICurrentUser curre
         var assignedIds = AssignedObligations(includeContributors: !writing).Select(x => x.Id);
         return db.TrackingObligations.Where(x => active.Any() && (
             (assignedIds.Contains(x.Id) && (
-                (x.Type == ObligationType.External && submitting.Any(g => (!g.DivisionId.HasValue || g.DivisionId == x.AccountableDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId))) ||
-                (x.Type != ObligationType.External && preparing.Any(g => (!g.DivisionId.HasValue || g.DivisionId == x.AccountableDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId))))) ||
+                (x.Type == ObligationType.External && submitting.Any()) ||
+                (x.Type != ObligationType.External && preparing.Any()))) ||
             broad.Any(g => (!g.DivisionId.HasValue || g.DivisionId == x.AccountableDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId)) ||
             (!writing && (incomingIds.Contains(x.Id) || monitors.Any(g =>
                 (!g.DivisionId.HasValue || g.DivisionId == x.ReportCycle.ReportDefinition.OwnerDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId))))));
@@ -89,7 +94,7 @@ public sealed class TrackingAccess(ReportTrackerDbContext db, ICurrentUser curre
             x.EffectiveFromUtc <= now && (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc > now));
         return db.TrackingObligations.Where(x => x.Type == ObligationType.Internal && x.ReceivingDivisionId.HasValue &&
             assignments.Any(a => a.ReportDefinitionId == x.ReportCycle.ReportDefinitionId && a.DivisionId == x.ReceivingDivisionId) &&
-            permissions.Any(g => (!g.DivisionId.HasValue || g.DivisionId == x.ReceivingDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.ReportCycle.ReportDefinitionId)));
+            permissions.Any());
     }
 
     public IQueryable<TrackingObligation> AuthorizedReceiptObligations()

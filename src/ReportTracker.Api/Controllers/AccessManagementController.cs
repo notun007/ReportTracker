@@ -14,6 +14,47 @@ namespace ReportTracker.Api.Controllers;
 public sealed class AccessManagementController(ReportTrackerDbContext db,TrackingAccess access) : ControllerBase
 {
     private AccessAdministration Administration => new(db,access);
+    [HttpGet("users/{userId:guid}/roles")]
+    public async Task<ActionResult<UserRoleMappingDirectory>> UserRoles(Guid userId, CancellationToken ct)
+    {
+        await access.RequireAsync(AccessPermissions.Roles,null,null,ct);
+        var user=await db.Users.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==userId,ct);
+        if(user is null)return NotFound();
+        var selected=await db.UserRoles.Where(x=>x.UserId==userId&&x.IsActive).Select(x=>x.RoleId).Distinct().ToListAsync(ct);
+        var roles=await db.Roles.AsNoTracking().Where(x=>x.IsActive||selected.Contains(x.Id)).OrderBy(x=>x.Name).ToListAsync(ct);
+        var permissions=await (from mapping in db.RolePermissions join permission in db.Permissions on mapping.PermissionId equals permission.Id
+                              select new {mapping.RoleId,permission.Code}).ToListAsync(ct);
+        return Ok(new UserRoleMappingDirectory(user.Id,user.DisplayName,Convert.ToBase64String(user.RowVersion),selected,
+            roles.Select(r=>new AccessRole(r.Id,r.Code,r.Name,r.Description,r.IsActive,r.IsSystem,
+                permissions.Where(p=>p.RoleId==r.Id).Select(p=>p.Code).Order().ToArray(),Convert.ToBase64String(r.RowVersion))).ToArray()));
+    }
+    [HttpPut("users/{userId:guid}/roles")]
+    public async Task<IActionResult> SaveUserRoles(Guid userId, SaveUserRoleMappingRequest request, CancellationToken ct)
+    {
+        await access.RequireAsync(AccessPermissions.Roles,null,null,ct);
+        await using var transaction=await Administration.BeginMutationAsync(ct);
+        await access.RequireAsync(AccessPermissions.Roles,null,null,ct);
+        var user=await db.Users.SingleOrDefaultAsync(x=>x.Id==userId,ct);
+        if(user is null)return NotFound();
+        AccessAdministration.CheckVersion(user,request.RowVersion);
+        if(request.RoleIds is null||request.RoleIds.Count>50||request.RoleIds.Contains(Guid.Empty)||request.RoleIds.Distinct().Count()!=request.RoleIds.Count)
+            throw new TrackingValidationException("Choose up to 50 distinct roles.");
+        var existing=await db.UserRoles.Where(x=>x.UserId==userId&&x.IsActive).ToListAsync(ct);
+        var previous=existing.Select(x=>x.RoleId).ToHashSet();
+        var available=await db.Roles.AsNoTracking().Where(x=>request.RoleIds.Contains(x.Id)).ToListAsync(ct);
+        if(available.Count!=request.RoleIds.Count||available.Any(x=>!x.IsActive&&!previous.Contains(x.Id)))
+            throw new TrackingValidationException("Choose existing active roles.");
+        if(previous.SetEquals(request.RoleIds))return NoContent();
+        // Retain old bindings exactly. Selecting another role must not broaden retained grants.
+        var assignments=existing.Where(x=>request.RoleIds.Contains(x.RoleId))
+            .Select(x=>new RoleAssignmentRequest(x.RoleId,AccessAdministration.Scope(x.DivisionId,x.ReportDefinitionId),x.DivisionId,x.ReportDefinitionId)).ToList();
+        assignments.AddRange(request.RoleIds.Where(id=>!previous.Contains(id)).Select(id=>new RoleAssignmentRequest(id,"Global")));
+        await Administration.EnsureAdministratorRemainsAsync(ct,userId:userId,assignments:assignments);
+        await Administration.ReplaceAssignmentsAsync(user,assignments,ct);
+        await db.SaveChangesAsync(ct);
+        if(transaction is not null)await transaction.CommitAsync(ct);
+        return NoContent();
+    }
     [HttpGet("catalog")]
     public async Task<ActionResult<AccessCatalogDirectory>> Catalog(CancellationToken ct)
     {

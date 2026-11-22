@@ -14,6 +14,9 @@ public sealed record UserAccessDirectory(Guid UserId, string User, Guid Division
     IReadOnlyList<UserRoleAssignment> Assignments, IReadOnlyList<UserPermissionScope> EffectivePermissions);
 public sealed record UserPermissionScope(string Code, string Scope, Guid? DivisionId, Guid? ReportDefinitionId, IReadOnlyList<string> Sources);
 public sealed record SaveUserAccessRequest([Required, MaxLength(50)] IReadOnlyList<RoleAssignmentRequest> Assignments, [Required] string RowVersion);
+public sealed record UserRoleMappingDirectory(Guid UserId, string User, string RowVersion,
+    IReadOnlyList<Guid> RoleIds, IReadOnlyList<AccessRole> Roles);
+public sealed record SaveUserRoleMappingRequest([Required, MaxLength(50)] IReadOnlyList<Guid> RoleIds, [Required] string RowVersion);
 public sealed record CreateAccessRoleRequest([Required, StringLength(64)] string Code, [Required, StringLength(100)] string Name,
     [StringLength(500)] string? Description, [Required, MaxLength(40)] IReadOnlyList<string> Permissions);
 public sealed record UpdateAccessRoleRequest([Required, StringLength(100)] string Name, [StringLength(500)] string? Description,
