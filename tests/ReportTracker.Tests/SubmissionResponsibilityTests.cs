@@ -54,6 +54,52 @@ public sealed class SubmissionResponsibilityTests
     }
 
     [Fact]
+    public async Task Receipt_controls_show_the_latest_active_dispatch_and_current_receipt_state()
+    {
+        await using var db = Db();
+        var f = await Seed(db);
+        var first = Assert.Single(f.Task.SendingEvents);
+        var latest = new SendingEvent
+        {
+            TrackingObligationId = f.Task.Id, ActingUserId = f.Sender.Id, Recipient = "Receiving",
+            ActualSentAtUtc = first.ActualSentAtUtc.AddMinutes(10), CreatedAtUtc = first.CreatedAtUtc.AddSeconds(1),
+            Channel = "Portal", Reference = "DISPATCH-2", IsPartial = true
+        };
+        db.SendingEvents.AddRange(latest, new SendingEvent
+        {
+            TrackingObligationId = f.Task.Id, ActingUserId = f.Sender.Id, Recipient = "Receiving",
+            ActualSentAtUtc = first.ActualSentAtUtc.AddMinutes(12), CreatedAtUtc = first.CreatedAtUtc.AddSeconds(2),
+            Channel = "Email", IsReversed = true
+        });
+        await db.SaveChangesAsync();
+        var endpoint = Controller(db, f.Receiver.Id);
+        async Task<ObligationActions> GetActions() => Assert.IsType<ObligationActions>(
+            Assert.IsType<OkObjectResult>((await endpoint.Actions(f.Task.Id, default)).Result).Value);
+
+        var actions = await GetActions();
+        Assert.True(actions.HasSending);
+        Assert.True(actions.CanConfirmReceipt);
+        Assert.Equal(ReceiptStatus.AwaitingConfirmation, actions.ReceiptState);
+        var dispatch = Assert.IsType<ComponentDispatchSummary>(actions.LatestDispatch);
+        Assert.Equal(latest.Id, dispatch.Id);
+        Assert.Equal("DISPATCH-2", dispatch.Reference);
+        Assert.True(dispatch.IsPartial);
+        Assert.Equal(DateTimeKind.Utc, dispatch.ActualSentAtUtc.Kind);
+
+        var receipt = Assert.IsType<ReceiptItem>(Assert.IsType<CreatedResult>(
+            (await endpoint.ConfirmReceipt(f.Task.Id, Receipt(), default)).Result).Value);
+        Assert.Equal(dispatch.Id, receipt.SendingEventId);
+        Assert.Equal(ReceiptStatus.ReceiptConfirmed, (await GetActions()).ReceiptState);
+
+        first.IsReversed = latest.IsReversed = true;
+        await db.SaveChangesAsync();
+        actions = await GetActions();
+        Assert.False(actions.HasSending);
+        Assert.False(actions.CanConfirmReceipt);
+        Assert.Null(actions.LatestDispatch);
+    }
+
+    [Fact]
     public async Task Assigned_preparing_contributor_cannot_confirm_own_component_even_with_receiving_assignment()
     {
         await using var db = Db(); var f = await Seed(db);

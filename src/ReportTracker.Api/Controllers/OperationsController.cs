@@ -35,14 +35,22 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
         var reviewer = await access.HasAsync(AccessPermissions.EvidenceReview, obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
         var manager = await access.HasAsync(AccessPermissions.Responsibilities, obligation.ReportCycle.ReportDefinition.OwnerDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
         var upload = writable && await access.HasAsync(AccessPermissions.Upload, obligation.AccountableDivisionId, obligation.ReportCycle.ReportDefinitionId, ct);
-        var hasSending = await db.SendingEvents.AnyAsync(x => x.TrackingObligationId == obligationId && !x.IsReversed, ct);
+        var sending = await db.SendingEvents.AsNoTracking()
+            .Where(x => x.TrackingObligationId == obligationId && !x.IsReversed)
+            .OrderByDescending(x => x.CreatedAtUtc).ThenByDescending(x => x.Id)
+            .Select(x => new { x.Id, x.ActualSentAtUtc, x.Channel, x.Reference, x.IsPartial }).FirstOrDefaultAsync(ct);
+        var hasSending = sending is not null;
         var canReceive = hasSending && await access.AuthorizedReceiptObligations().AnyAsync(x => x.Id == obligationId, ct);
         var receiverName = await db.Divisions.Where(x => x.Id == obligation.ReceivingDivisionId).Select(x => x.Name).FirstOrDefaultAsync(ct);
         var canAssign = manager && obligation.Type == ObligationType.Internal && !obligation.ReportCycle.ReportDefinition.ReceivingDivisionId.HasValue;
         var divisions = canAssign ? await db.Divisions.Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => new LookupItem(x.Id, x.Name)).ToListAsync(ct) : [];
         return Ok(new ObligationActions(upload, canReceive, reviewer, writable, obligation.Type == ObligationType.External,
             hasSending, obligation.ReceivingDivisionId, receiverName, canAssign, divisions,
-            manager && obligation.Type == ObligationType.Internal && obligation.ReceivingDivisionId.HasValue));
+            manager && obligation.Type == ObligationType.Internal && obligation.ReceivingDivisionId.HasValue,
+            obligation.ReceiptStatus,
+            sending is null || obligation.Type != ObligationType.Internal ? null :
+                new ComponentDispatchSummary(sending.Id, DateTime.SpecifyKind(sending.ActualSentAtUtc, DateTimeKind.Utc),
+                    sending.Channel, sending.Reference, sending.IsPartial)));
     }
 
     [HttpPatch("receiving-division")]
@@ -136,7 +144,7 @@ public sealed class ObligationOperationsController(ReportTrackerDbContext db, Tr
         if (request.ReceivedAtUtc.Kind != DateTimeKind.Utc || request.ReceivedAtUtc > DateTime.UtcNow.AddMinutes(5))
             throw new TrackingValidationException("Enter a valid receipt time in UTC.");
         if (request.IsDisputed && string.IsNullOrWhiteSpace(request.Reason)) throw new TrackingValidationException("A dispute reason is required.");
-        var sending = obligation.SendingEvents.Where(x => !x.IsReversed).OrderByDescending(x => x.CreatedAtUtc).FirstOrDefault()
+        var sending = obligation.SendingEvents.Where(x => !x.IsReversed).OrderByDescending(x => x.CreatedAtUtc).ThenByDescending(x => x.Id).FirstOrDefault()
             ?? throw new TrackingConflictException("Record a submission before confirming receipt.");
         if (request.ReceivedAtUtc < sending.ActualSentAtUtc) throw new TrackingValidationException("Receipt time cannot be before the recorded sending time.");
         var receipt = new ReceiptConfirmation { SendingEventId = sending.Id, ActingUserId = access.UserId,

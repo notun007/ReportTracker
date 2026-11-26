@@ -45,6 +45,13 @@ public sealed record CreateReportRequest(
     Guid? SubmissionRecipientId = null, [MaxLength(20)] IReadOnlyList<Guid>? SubmissionDepartmentIds = null,
     [Range(1, 2)] int ReportTypeId = 2,
     [Range(0, 365)] int ReportDeadlineOffsetDays = 0);
+public sealed record UpdateReportConfigurationRequest(
+    [Required] string Frequency, Guid OwnerDivisionId, Guid? ReceivingDivisionId, Guid? SubmittingDivisionId,
+    [Required] string RowVersion,
+    string? Code = null, string? Name = null, int? ReportTypeId = null, TimeOnly? DueTime = null,
+    int? ReportDeadlineOffsetDays = null, int? ComponentDeadlineOffsetDays = null,
+    Guid? SubmissionRecipientId = null, IReadOnlyList<Guid>? SubmissionDepartmentIds = null,
+    string? InstructionReference = null, string? Description = null);
 public sealed record ReportComponentRequest(
     [Required, StringLength(250)] string Name, [StringLength(1000)] string? Description,
     Guid ProviderDivisionId, Guid? PrimaryAssigneeId, Guid? AlternateAssigneeId,
@@ -57,7 +64,9 @@ public sealed record ReportItem(Guid Id, string Code, string Name, Guid OwnerDiv
     Guid? SubmittingDivisionId = null, Guid? PrimarySubmittingAssigneeId = null, Guid? AlternateSubmittingAssigneeId = null, Guid? ReceivingDivisionId = null,
     Guid? SubmissionRecipientId = null, IReadOnlyList<Guid>? SubmissionDepartmentIds = null, string? SubmissionDestination = null,
     TimeOnly? DueTime = null, int? ComponentDeadlineOffsetDays = null, string? TimeZoneId = null,
-    string? InstructionReference = null, string? Description = null, int ReportDeadlineOffsetDays = 0);
+    string? InstructionReference = null, string? Description = null, int ReportDeadlineOffsetDays = 0,
+    string RowVersion = "", bool CanEdit = false, ReportDivisionLocks? DivisionLocks = null);
+public sealed record ReportDivisionLocks(bool Coordinating, bool Receiving, bool FinalSubmitting);
 public sealed record SubmissionRecipientItem(Guid Id, string Name, IReadOnlyList<LookupItem> Departments);
 public sealed record CreateSubmissionRecipientRequest([Required, StringLength(250)] string Name);
 public sealed record CreateSubmissionDepartmentRequest([Required, StringLength(150)] string Name);

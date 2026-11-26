@@ -11,3 +11,4 @@ public sealed record ReportResponsibilityAssignments(Guid ReportId, string Repor
 public sealed record SaveReportResponsibilityAssignmentsRequest(
     [Required] AssigneePair Controller, [Required] AssigneePair Receiver,
     [Required] AssigneePair FinalSubmission, [Required] string RowVersion);
+public sealed record UnassignReportResponsibilityRequest([Required] string RowVersion);

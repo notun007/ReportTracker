@@ -116,6 +116,49 @@ public sealed class ReportResponsibilityAssignmentsTests
         Assert.Equal(3, await f.Db.ResponsibilityAssignments.CountAsync(x => !x.EffectiveToUtc.HasValue));
     }
 
+    [Theory]
+    [InlineData("controller", "ReportController")]
+    [InlineData("receiver", "ComponentReceiver")]
+    [InlineData("finalSubmission", "MainSender")]
+    public async Task Unassign_deletes_only_the_selected_active_pair_and_preserves_history(string role, string type)
+    {
+        await using var f = await Fixture.Create();
+        var request = f.Request() with
+        {
+            Controller = new(f.Controller.Id, f.ControllerDeputy.Id),
+            Receiver = new(f.Receiver.Id, f.ReceiverDeputy.Id),
+            FinalSubmission = new(f.Submitter.Id, f.SubmitterDeputy.Id)
+        };
+        await f.Endpoint.Save(f.Report.Id, request, default);
+        var before = await f.Get();
+        var active = await f.Db.ResponsibilityAssignments.SingleAsync(x => x.ResponsibilityType == type && !x.EffectiveToUtc.HasValue);
+        var previous = await f.Db.ResponsibilityAssignments.SingleAsync(x => x.EffectiveToUtc.HasValue);
+        var taskVersion = f.Task.RowVersion.ToArray();
+        var officerCount = await f.Db.Users.CountAsync();
+
+        await Assert.ThrowsAsync<TrackingConflictException>(() => f.Endpoint.Unassign(f.Report.Id, role, new(request.RowVersion), default));
+        Assert.IsType<NoContentResult>(await f.Endpoint.Unassign(f.Report.Id, role, new(before.RowVersion), default));
+
+        Assert.False(await f.Db.ResponsibilityAssignments.AnyAsync(x => x.Id == active.Id));
+        Assert.True(await f.Db.ResponsibilityAssignments.AnyAsync(x => x.Id == previous.Id));
+        Assert.Equal(2, await f.Db.ResponsibilityAssignments.CountAsync(x => !x.EffectiveToUtc.HasValue));
+        var after = await f.Get();
+        var cleared = role switch { "controller" => after.Controller, "receiver" => after.Receiver, _ => after.FinalSubmission };
+        Assert.Null(cleared.PrimaryAssigneeId);
+        Assert.Null(cleared.AlternateAssigneeId);
+        Assert.NotEqual(before.RowVersion, after.RowVersion);
+        Assert.Equal(f.Submitter.Id, f.Task.PrimaryAssigneeId);
+        Assert.Equal(taskVersion, f.Task.RowVersion);
+        Assert.Equal(officerCount, await f.Db.Users.CountAsync());
+        var setup = new SetupController(f.Db, f.Access, new Microsoft.AspNetCore.Identity.PasswordHasher<AppUser>());
+        var reportItems = Assert.IsAssignableFrom<IEnumerable<ReportItem>>(Assert.IsType<OkObjectResult>(await setup.Reports(default)).Value);
+        Assert.Equal(new ReportDivisionLocks(role != "controller", role != "receiver", role != "finalSubmission"),
+            Assert.Single(reportItems).DivisionLocks);
+        var audit = await f.Db.AuditEvents.SingleAsync(x => x.Action == "ReportResponsibilityUnassigned");
+        Assert.Contains(active.Id.ToString(), audit.DataJson);
+        Assert.Equal(f.Manager.Id, audit.ActorUserId);
+    }
+
     [Fact]
     public async Task Unrelated_scopes_cannot_read_or_change_report_assignments()
     {
@@ -123,6 +166,7 @@ public sealed class ReportResponsibilityAssignmentsTests
         var endpoint = new ReportResponsibilityAssignmentsController(f.Db, new TrackingAccess(f.Db, new Actor(f.Receiver.Id)));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => endpoint.Get(f.Report.Id, default));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => endpoint.Save(f.Report.Id, f.Request(), default));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => endpoint.Unassign(f.Report.Id, "finalSubmission", new(f.Request().RowVersion), default));
         var grant = await f.Db.UserRoles.SingleAsync(x => x.UserId == f.Manager.Id);
         grant.ReportDefinitionId = Guid.NewGuid(); await f.Db.SaveChangesAsync();
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => f.Endpoint.Get(f.Report.Id, default));
@@ -141,8 +185,10 @@ public sealed class ReportResponsibilityAssignmentsTests
                 EffectiveFromUtc = DateTime.UtcNow.AddDays(-1)
             });
         await f.Db.SaveChangesAsync();
-        Assert.Equal(3, (await f.Get()).ExistingReceiverCount);
+        var data = await f.Get();
+        Assert.Equal(3, data.ExistingReceiverCount);
         await Assert.ThrowsAsync<TrackingConflictException>(() => f.Endpoint.Save(f.Report.Id, f.Request(), default));
+        await Assert.ThrowsAsync<TrackingConflictException>(() => f.Endpoint.Unassign(f.Report.Id, "receiver", new(data.RowVersion), default));
         Assert.Equal(4, await f.Db.ResponsibilityAssignments.CountAsync(x => !x.EffectiveToUtc.HasValue));
         Assert.Empty(f.Db.AuditEvents);
     }

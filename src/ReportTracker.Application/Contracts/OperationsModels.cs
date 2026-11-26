@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using ReportTracker.Domain.Enums;
 
 namespace ReportTracker.Application.Contracts;
 
@@ -7,7 +8,9 @@ public sealed record EvidenceItem(Guid Id, Guid TrackingObligationId, string Ori
     Guid UploadedByUserId = default, bool CanReview = false);
 public sealed record ObligationActions(bool CanUploadEvidence, bool CanConfirmReceipt, bool CanReviewEvidence, bool CanAmendStatus,
     bool IsExternalReceipt, bool HasSending, Guid? ReceivingDivisionId, string? ReceivingDivisionName, bool CanAssignReceiver,
-    IReadOnlyList<LookupItem> ReceivingDivisions, bool CanManageReceivingOfficers = false);
+    IReadOnlyList<LookupItem> ReceivingDivisions, bool CanManageReceivingOfficers = false,
+    ReceiptStatus? ReceiptState = null, ComponentDispatchSummary? LatestDispatch = null);
+public sealed record ComponentDispatchSummary(Guid Id, DateTime ActualSentAtUtc, string Channel, string? Reference, bool IsPartial);
 
 public sealed record ReceivingOfficerDirectory(Guid ReportId, Guid DivisionId, string Division,
     IReadOnlyList<LookupItem> Officers, IReadOnlyList<Guid> SelectedOfficerIds, string RowVersion);

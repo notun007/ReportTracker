@@ -33,7 +33,9 @@ public sealed record ObligationListItemDto(
     string Division,
     IReadOnlyList<PendingComponentDto> PendingComponents,
     bool IsAssignedReceiver = false,
-    Guid ReportId = default);
+    Guid ReportId = default,
+    string? ReportCode = null,
+    DateOnly? PeriodStart = null);
 
 public sealed record PendingComponentDto(Guid Id, string Name, string SendingStatus, string ReceiptStatus, string EvidenceStatus);
 
@@ -63,7 +65,8 @@ public sealed record ReadinessComponentDto(
     string SendingStatus,
     string EvidenceStatus,
     string ReceiptStatus,
-    bool IsBlocking);
+    bool IsBlocking,
+    bool IsRequired = true);
 
 public sealed record SubmissionReadinessDto(
     Guid CycleId,

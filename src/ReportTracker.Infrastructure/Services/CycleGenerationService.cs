@@ -80,13 +80,15 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
     public async Task<YearlyCycleGenerationResult> GenerateYearAsync(int year, Guid? reportId,
         IReadOnlyCollection<string>? periodKeys, CancellationToken ct)
     {
+        ValidateYear(year);
+        var reports = await db.ReportDefinitions.Where(x => x.IsActive && (!reportId.HasValue || x.Id == reportId.Value))
+            .Include(x => x.Versions).Include(x => x.SubmissionRecipient)
+            .Include(x => x.SubmissionDepartments).ThenInclude(x => x.Department)
+            .AsSplitQuery().ToDictionaryAsync(x => x.Id, ct);
         var preview = await PreviewYearAsync(year, reportId, ct);
         var selectedKeys = periodKeys?.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var planned = preview.Items.Where(x => x.Status == "New" && (selectedKeys is null || selectedKeys.Contains(x.PeriodKey))).ToList();
         var reportIds = planned.Select(x => x.ReportId).Distinct().ToArray();
-        var reports = await db.ReportDefinitions.Where(x => reportIds.Contains(x.Id)).Include(x => x.Versions)
-            .Include(x => x.SubmissionRecipient).Include(x => x.SubmissionDepartments).ThenInclude(x => x.Department)
-            .AsSplitQuery().ToDictionaryAsync(x => x.Id, ct);
         var assignments = await db.ResponsibilityAssignments.Where(x => reportIds.Contains(x.ReportDefinitionId) && x.ResponsibilityType == "MainSender" &&
             x.EffectiveFromUtc <= DateTime.UtcNow && (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc >= DateTime.UtcNow))
             .OrderByDescending(x => x.EffectiveFromUtc).ToListAsync(ct);
@@ -97,7 +99,8 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
 
         foreach (var item in planned)
         {
-            var report = reports[item.ReportId];
+            if (!reports.TryGetValue(item.ReportId, out var report))
+                throw new TrackingConflictException("Report configuration changed during generation. Refresh the preview and try again.");
             var version = report.Versions.Where(x => x.EffectiveFrom.Year <= year && (!x.EffectiveTo.HasValue || x.EffectiveTo.Value.Year >= year))
                 .OrderByDescending(x => x.VersionNumber).FirstOrDefault();
             var assignment = assignments.FirstOrDefault(x => x.ReportDefinitionId == report.Id);
@@ -138,6 +141,7 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                     EffectiveDueAtUtc = componentDueUtc, ReceiptStatus = ReceiptStatus.NotRequired, EvidenceStatus = EvidenceStatus.NotRequired });
                 componentsCreated++;
             }
+            report.UpdatedAtUtc = DateTime.UtcNow;
             db.ReportCycles.Add(cycle);
             db.AuditEvents.Add(new AuditEvent { EntityType = nameof(ReportCycle), EntityId = cycle.Id, Action = "YearlyCyclesManuallyGenerated",
                 DataJson = JsonSerializer.Serialize(new { year, report.Id, item.PeriodKey, item.PeriodStart, item.PeriodEnd, ComponentCount = components.Count }) });
@@ -214,6 +218,7 @@ internal sealed class CycleGenerationService(ReportTrackerDbContext db) : ICycle
                         EvidenceStatus = EvidenceStatus.NotRequired } );
                     componentsCreated++;
                 }
+                report.UpdatedAtUtc = DateTime.UtcNow;
                 db.ReportCycles.Add(cycle);
                 db.AuditEvents.Add(new AuditEvent { EntityType = nameof(ReportCycle), EntityId = cycle.Id, Action = "CycleAutomaticallyGenerated",
                     DataJson = JsonSerializer.Serialize(new { report.Id, period.Key, ComponentCount = components.Count }) });

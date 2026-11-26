@@ -55,6 +55,7 @@ public sealed class ComponentsController(ReportTrackerDbContext db, TrackingAcce
             ReceivingDivisionId = request.ReceivingDivisionId,
             DeadlineRuleJson = JsonSerializer.Serialize(new { offsetDays = request.DeadlineOffsetDays })
         };
+        report.UpdatedAtUtc = DateTime.UtcNow;
         db.ComponentDefinitions.Add(component);
         db.AuditEvents.Add(new AuditEvent
         {
@@ -173,7 +174,7 @@ public sealed class ReadinessController(ReportTrackerDbContext db, TrackingAcces
             x.Id, x.Name, divisions.GetValueOrDefault(x.AccountableDivisionId, "Unknown division"),
             users.GetValueOrDefault(x.PrimaryAssigneeId ?? Guid.Empty, "Unassigned"), DateTime.SpecifyKind(x.EffectiveDueAtUtc, DateTimeKind.Utc),
             TrackingRules.Timeliness(x.EffectiveDueAtUtc, x.SendingStatus == SendingStatus.Sent ? x.UpdatedAtUtc : null, now),
-            Label(x.SendingStatus), Label(x.EvidenceStatus), Label(x.ReceiptStatus), x.IsRequired && !Complete(x))).ToList();
+            Label(x.SendingStatus), Label(x.EvidenceStatus), Label(x.ReceiptStatus), x.IsRequired && !Complete(x), x.IsRequired)).ToList();
         var required = components.Count(x => x.IsRequired);
         var completed = components.Count(x => x.IsRequired && Complete(x));
         return Ok(new SubmissionReadinessDto(cycleId, main.Id, main.ReportCycle.ReportDefinition.Name, main.ReportCycle.PeriodLabel,

@@ -130,7 +130,7 @@ internal sealed class TrackingService(ReportTrackerDbContext db, TrackingAccess 
             readiness?.Required ?? 0, readiness?.Completed ?? 0,
             row.Type == ObligationType.External && readiness is { } value && value.Required == value.Completed,
             row.AccountableDivisionId, divisions.GetValueOrDefault(row.AccountableDivisionId, "Unknown division"), readiness?.Pending ?? [], incoming,
-            row.ReportCycle.ReportDefinitionId);
+            row.ReportCycle.ReportDefinitionId, row.ReportCycle.ReportDefinition.Code, row.ReportCycle.PeriodStart);
     }
 
     private static string RecipientDisplay(TrackingObligation row, IReadOnlyDictionary<Guid, string> divisions)

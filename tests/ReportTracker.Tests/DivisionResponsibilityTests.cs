@@ -18,6 +18,176 @@ namespace ReportTracker.Tests;
 public sealed class DivisionResponsibilityTests
 {
     [Fact]
+    public async Task Frequency_can_change_until_a_cycle_exists()
+    {
+        using var provider = Provider();
+        await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>();
+        var f = await Seed(db);
+        var controller = Controller(db, f.Coordinator.Id);
+        UpdateReportConfigurationRequest Request(string frequency) => new(frequency, f.Report.OwnerDivisionId,
+            f.Report.ReceivingDivisionId, f.Report.SubmittingDivisionId, Convert.ToBase64String(f.Report.RowVersion));
+
+        var codeChange = Assert.IsType<BadRequestObjectResult>(await controller.UpdateReportConfiguration(
+            f.Report.Id, Request("Monthly") with { Code = "REPLACEMENT" }, default));
+        Assert.Equal("Report code cannot be changed after creation.", Assert.Single(
+            Assert.IsType<ValidationProblemDetails>(codeChange.Value).Errors["code"]));
+
+        Assert.IsType<NoContentResult>(await controller.UpdateReportConfiguration(f.Report.Id, Request("Weekly"), default));
+        var version = Assert.Single(f.Report.Versions);
+        Assert.Equal(Frequency.Weekly, version.Frequency);
+
+        var day = Today();
+        db.ReportCycles.Add(new ReportCycle { ReportDefinitionId = f.Report.Id, DefinitionVersionId = version.Id,
+            PeriodKey = "first", PeriodLabel = "First", PeriodStart = day, PeriodEnd = day });
+        await db.SaveChangesAsync();
+
+        var blocked = Assert.IsType<BadRequestObjectResult>(
+            await controller.UpdateReportConfiguration(f.Report.Id, Request("Monthly"), default));
+        Assert.Contains("at least one reporting cycle exists", Assert.Single(
+            Assert.IsType<ValidationProblemDetails>(blocked.Value).Errors["frequency"]));
+        Assert.Equal(Frequency.Weekly, version.Frequency);
+        Assert.IsType<NoContentResult>(await controller.UpdateReportConfiguration(f.Report.Id,
+            Request("Weekly") with { ReceivingDivisionId = f.B.Id }, default));
+    }
+
+    [Fact]
+    public async Task Other_report_fields_can_change_after_a_cycle_exists()
+    {
+        using var provider = Provider();
+        await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>();
+        var f = await Seed(db);
+        var version = Assert.Single(f.Report.Versions);
+        var recipient = new SubmissionRecipient { Name = "New recipient" };
+        var department = new SubmissionRecipientDepartment { Name = "New department", SubmissionRecipientId = recipient.Id };
+        var day = Today();
+        var due = DateTime.UtcNow.AddDays(1);
+        var cycle = new ReportCycle { ReportDefinitionId = f.Report.Id, DefinitionVersionId = version.Id,
+            PeriodKey = "existing", PeriodLabel = "Existing", PeriodStart = day, PeriodEnd = day };
+        var obligation = new TrackingObligation { ReportCycleId = cycle.Id, Type = ObligationType.External,
+            Name = "Final submission", Recipient = "Previous destination", AccountableDivisionId = f.D.Id,
+            OriginalDueAtUtc = due, EffectiveDueAtUtc = due };
+        cycle.Obligations.Add(obligation);
+        var component = await db.ComponentDefinitions.SingleAsync(x => x.Name == "Component A");
+        component.DeadlineRuleJson = """{"offsetDays":1}""";
+        db.AddRange(recipient, department, cycle);
+        await db.SaveChangesAsync();
+
+        var request = new UpdateReportConfigurationRequest("Monthly", f.C.Id, f.Report.ReceivingDivisionId, f.D.Id,
+            Convert.ToBase64String(f.Report.RowVersion), Name: "Changed report", ReportTypeId: 1,
+            DueTime: new TimeOnly(16, 30), ReportDeadlineOffsetDays: 4, ComponentDeadlineOffsetDays: 3,
+            SubmissionRecipientId: recipient.Id, SubmissionDepartmentIds: [department.Id],
+            InstructionReference: "Policy 9", Description: "Updated instructions");
+        var controller = Controller(db, f.Coordinator.Id);
+        var rejected = Assert.IsType<BadRequestObjectResult>(
+            await controller.UpdateReportConfiguration(f.Report.Id, request with { Code = "REPLACEMENT", SubmissionDepartmentIds = [] }, default));
+        var errors = Assert.IsType<ValidationProblemDetails>(rejected.Value).Errors;
+        Assert.Contains("code", errors.Keys);
+        Assert.Contains("submissionDepartmentIds", errors.Keys);
+        Assert.Equal("RIT", f.Report.Code);
+
+        Assert.IsType<NoContentResult>(await controller.UpdateReportConfiguration(f.Report.Id, request, default));
+        Assert.Equal("RIT", f.Report.Code);
+        Assert.Equal("Changed report", f.Report.Name);
+        Assert.Equal(1, f.Report.ReportTypeId);
+        Assert.Equal("Policy 9", f.Report.InstructionReference);
+        Assert.Equal("Updated instructions", f.Report.Description);
+        Assert.Equal(recipient.Id, f.Report.SubmissionRecipientId);
+        Assert.Equal(department.Id, Assert.Single(f.Report.SubmissionDepartments).DepartmentId);
+        Assert.Equal(new TimeOnly(16, 30), version.DueTime);
+        Assert.Equal(3, version.ComponentDeadlineOffsetDays);
+        Assert.Equal(4, (await db.ScheduleRules.SingleAsync()).OffsetDays);
+        Assert.Equal("""{"offsetDays":3}""", component.DeadlineRuleJson);
+        Assert.Equal(due, obligation.OriginalDueAtUtc);
+        Assert.Equal("Previous destination", obligation.Recipient);
+    }
+
+    [Theory]
+    [InlineData("ReportController", "ownerDivisionId")]
+    [InlineData("ComponentReceiver", "receivingDivisionId")]
+    [InlineData("MainSender", "submittingDivisionId")]
+    public async Task Division_change_requires_its_responsibility_to_be_unassigned_in_the_proposed_division(string type, string field)
+    {
+        using var provider = Provider();
+        await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>();
+        var f = await Seed(db);
+        (await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id)).DivisionId = null;
+        (await db.ResponsibilityAssignments.SingleAsync(x => x.ReportDefinitionId == f.Report.Id && x.ResponsibilityType == "MainSender"))
+            .EffectiveToUtc = DateTime.UtcNow.AddMinutes(-1);
+        var officer = await db.Users.SingleAsync(x => x.DivisionId == f.A.Id);
+        var assignment = new ResponsibilityAssignment { ReportDefinitionId = f.Report.Id, DivisionId = f.A.Id,
+            PrimaryAssigneeId = officer.Id, ResponsibilityType = type, EffectiveFromUtc = DateTime.UtcNow.AddDays(-2) };
+        db.ResponsibilityAssignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        var request = new UpdateReportConfigurationRequest("Weekly", f.A.Id, f.A.Id, f.A.Id,
+            Convert.ToBase64String(f.Report.RowVersion));
+        var controller = Controller(db, f.Coordinator.Id);
+        var blocked = Assert.IsType<BadRequestObjectResult>(
+            await controller.UpdateReportConfiguration(f.Report.Id, request, default));
+        Assert.Equal(field, Assert.Single(Assert.IsType<ValidationProblemDetails>(blocked.Value).Errors).Key);
+        Assert.Equal(Frequency.Monthly, Assert.Single(f.Report.Versions).Frequency);
+        Assert.Equal(f.C.Id, f.Report.OwnerDivisionId);
+        Assert.Equal(f.D.Id, f.Report.SubmittingDivisionId);
+
+        assignment.EffectiveToUtc = DateTime.UtcNow.AddDays(-1);
+        await db.SaveChangesAsync();
+        Assert.IsType<NoContentResult>(await controller.UpdateReportConfiguration(f.Report.Id, request, default));
+        Assert.Equal(f.A.Id, f.Report.OwnerDivisionId);
+        Assert.Equal(f.A.Id, f.Report.ReceivingDivisionId);
+        Assert.Equal(f.A.Id, f.Report.SubmittingDivisionId);
+        Assert.Single(await db.AuditEvents.Where(x => x.Action == "ReportConfigurationChanged").ToListAsync());
+        await Assert.ThrowsAsync<TrackingConflictException>(() =>
+            controller.UpdateReportConfiguration(f.Report.Id, request, default));
+    }
+
+    [Fact]
+    public async Task Existing_responsibilities_lock_only_their_current_report_divisions()
+    {
+        using var provider = Provider();
+        await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportTrackerDbContext>();
+        var f = await Seed(db);
+        (await db.UserRoles.SingleAsync(x => x.UserId == f.Coordinator.Id)).DivisionId = null;
+        f.Report.ReceivingDivisionId = f.C.Id;
+        var now = DateTime.UtcNow;
+        db.ResponsibilityAssignments.AddRange(
+            new ResponsibilityAssignment { ReportDefinitionId = f.Report.Id, DivisionId = f.C.Id,
+                PrimaryAssigneeId = f.Coordinator.Id, ResponsibilityType = "ReportController", EffectiveFromUtc = now.AddDays(-1) },
+            new ResponsibilityAssignment { ReportDefinitionId = f.Report.Id, DivisionId = f.C.Id,
+                PrimaryAssigneeId = f.Coordinator.Id, ResponsibilityType = TrackingAccess.ComponentReceiverResponsibility,
+                EffectiveFromUtc = now.AddDays(-2), EffectiveToUtc = now.AddDays(-1) });
+        await db.SaveChangesAsync();
+        var controller = Controller(db, f.Coordinator.Id);
+        var reports = Assert.IsAssignableFrom<IEnumerable<ReportItem>>(Assert.IsType<OkObjectResult>(await controller.Reports(default)).Value);
+        Assert.Equal(new ReportDivisionLocks(true, false, true), Assert.Single(reports).DivisionLocks);
+
+        var request = new UpdateReportConfigurationRequest("Monthly", f.A.Id, f.B.Id, f.A.Id, Convert.ToBase64String(f.Report.RowVersion));
+        var blocked = Assert.IsType<BadRequestObjectResult>(await controller.UpdateReportConfiguration(f.Report.Id, request, default));
+        var errors = Assert.IsType<ValidationProblemDetails>(blocked.Value).Errors;
+        Assert.Equal(new[] { "ownerDivisionId", "submittingDivisionId" }, errors.Keys.Order().ToArray());
+        Assert.All(errors.Values, messages => Assert.Contains("assigned in the current division", Assert.Single(messages)));
+        Assert.Equal(f.C.Id, f.Report.ReceivingDivisionId);
+
+        Assert.IsType<NoContentResult>(await controller.UpdateReportConfiguration(f.Report.Id,
+            request with { OwnerDivisionId = f.C.Id, SubmittingDivisionId = f.D.Id }, default));
+        Assert.Equal(f.B.Id, f.Report.ReceivingDivisionId);
+
+        db.ResponsibilityAssignments.Add(new ResponsibilityAssignment { ReportDefinitionId = f.Report.Id, DivisionId = f.B.Id,
+            PrimaryAssigneeId = (await db.Users.SingleAsync(x => x.DivisionId == f.B.Id)).Id,
+            ResponsibilityType = TrackingAccess.ComponentReceiverResponsibility, EffectiveFromUtc = now.AddMinutes(-1) });
+        await db.SaveChangesAsync();
+        reports = Assert.IsAssignableFrom<IEnumerable<ReportItem>>(Assert.IsType<OkObjectResult>(await controller.Reports(default)).Value);
+        Assert.Equal(new ReportDivisionLocks(true, true, true), Assert.Single(reports).DivisionLocks);
+        var receiverBlocked = Assert.IsType<BadRequestObjectResult>(await controller.UpdateReportConfiguration(f.Report.Id,
+            request with { OwnerDivisionId = f.C.Id, SubmittingDivisionId = f.D.Id, ReceivingDivisionId = f.C.Id,
+                RowVersion = Convert.ToBase64String(f.Report.RowVersion) }, default));
+        Assert.Contains("receivingDivisionId", Assert.IsType<ValidationProblemDetails>(receiverBlocked.Value).Errors.Keys);
+    }
+
+    [Fact]
     public async Task Report_can_be_created_without_officers_and_assigned_later_for_cycle_generation()
     {
         using var provider = Provider(); await using var scope = provider.CreateAsyncScope();
@@ -77,7 +247,10 @@ public sealed class DivisionResponsibilityTests
         var response = await new ReadinessController(db, new TrackingAccess(db, new Actor(f.Coordinator.Id))).Get(required.ReportCycleId, default);
         var result = Assert.IsType<SubmissionReadinessDto>(Assert.IsType<OkObjectResult>(response.Result).Value);
         Assert.Equal(1, result.RequiredComponents); Assert.Equal(1, result.CompletedComponents); Assert.True(result.IsReady);
-        Assert.False(Assert.Single(result.Components, x => x.Name == "Component B").IsBlocking);
+        Assert.True(Assert.Single(result.Components, x => x.Name == "Component A").IsRequired);
+        var optionalResult = Assert.Single(result.Components, x => x.Name == "Component B");
+        Assert.False(optionalResult.IsRequired);
+        Assert.False(optionalResult.IsBlocking);
     }
 
     [Fact]

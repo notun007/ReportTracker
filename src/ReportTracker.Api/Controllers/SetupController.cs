@@ -14,6 +14,7 @@ namespace ReportTracker.Api.Controllers;
 [ApiController, Authorize, Route("api/setup")]
 public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess access, IPasswordHasher<AppUser> hasher) : ControllerBase
 {
+    private const string MainSenderResponsibility = "MainSender";
     [HttpGet("lookups")]
     public async Task<IActionResult> Lookups(CancellationToken ct)
     {
@@ -32,12 +33,15 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
     {
         await access.EnsureActiveAsync(ct);
         var grants = access.ConfigurationGrants();
+        var editors = access.Grants("reports.manage");
         var reports = await db.ReportDefinitions.AsNoTracking().Where(x => grants.Any(g =>
                 (!g.DivisionId.HasValue || g.DivisionId == x.OwnerDivisionId) && (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.Id)))
             .OrderBy(x => x.Name).Select(x => new
             {
                 x.Id, x.Code, x.Name, x.ReportTypeId, ReportTypeName = x.ReportTypeId == 1 ? "RIT" : "None RIT", x.OwnerDivisionId, x.SubmittingDivisionId, x.ReceivingDivisionId, x.BbRecipient,
-                x.SubmissionRecipientId, x.InstructionReference, x.Description,
+                x.SubmissionRecipientId, x.InstructionReference, x.Description, x.RowVersion,
+                CanEdit = x.IsActive && editors.Any(g => (!g.DivisionId.HasValue || g.DivisionId == x.OwnerDivisionId) &&
+                    (!g.ReportDefinitionId.HasValue || g.ReportDefinitionId == x.Id)),
                 RecipientName = x.SubmissionRecipient != null ? x.SubmissionRecipient.Name : x.BbRecipient,
                 Departments = x.SubmissionDepartments.Select(d => new { d.DepartmentId, d.Department.Name }).ToList(),
                 Version = x.Versions.OrderByDescending(v => v.VersionNumber)
@@ -50,10 +54,19 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         var deadlineOffsets = deadlineRules.GroupBy(x => x.DefinitionVersionId)
             .ToDictionary(x => x.Key, x => x.First().OffsetDays ?? 0);
         var ids = reports.Select(x => x.Id).ToArray();
-        var now = DateTime.UtcNow;
-        var assignments = await db.ResponsibilityAssignments.AsNoTracking().Where(x => ids.Contains(x.ReportDefinitionId) && x.ResponsibilityType == "MainSender" &&
-            x.EffectiveFromUtc <= now && (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc > now)).OrderByDescending(x => x.EffectiveFromUtc).ToListAsync(ct);
-        return Ok(reports.Select(x => { var sender = assignments.FirstOrDefault(a => a.ReportDefinitionId == x.Id && a.DivisionId == x.SubmittingDivisionId);
+        var assignments = await CurrentResponsibilities().AsNoTracking().Where(x => ids.Contains(x.ReportDefinitionId) &&
+            (x.ResponsibilityType == MainSenderResponsibility ||
+                x.ResponsibilityType == ReportResponsibilityAssignmentsController.ControllerResponsibility ||
+                x.ResponsibilityType == TrackingAccess.ComponentReceiverResponsibility))
+            .OrderByDescending(x => x.EffectiveFromUtc).ToListAsync(ct);
+        var byRole = assignments.ToLookup(a => (a.ReportDefinitionId, (Guid?)a.DivisionId, a.ResponsibilityType));
+        return Ok(reports.Select(x =>
+        {
+            var sender = byRole[(x.Id, x.SubmittingDivisionId, MainSenderResponsibility)].FirstOrDefault();
+            var locks = new ReportDivisionLocks(
+                byRole.Contains((x.Id, x.OwnerDivisionId, ReportResponsibilityAssignmentsController.ControllerResponsibility)),
+                byRole.Contains((x.Id, x.ReceivingDivisionId, TrackingAccess.ComponentReceiverResponsibility)),
+                sender is not null);
             return new ReportItem(x.Id, x.Code, x.Name, x.OwnerDivisionId, x.BbRecipient, (x.Version?.Frequency ?? default).ToString(), x.CycleCount,
                 x.ReportTypeId, x.ReportTypeName,
                 x.SubmittingDivisionId, sender?.PrimaryAssigneeId, sender?.AlternateAssigneeId, x.ReceivingDivisionId,
@@ -61,7 +74,9 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
                 ReportDefinition.FormatSubmissionDestination(x.RecipientName, x.Departments.Select(d => d.Name)),
                 x.Version?.DueTime, x.Version?.ComponentDeadlineOffsetDays, x.Version?.TimeZoneId,
                 x.InstructionReference, x.Description,
-                x.Version is null ? 0 : deadlineOffsets.GetValueOrDefault(x.Version.Id)); }));
+                x.Version is null ? 0 : deadlineOffsets.GetValueOrDefault(x.Version.Id),
+                Convert.ToBase64String(x.RowVersion), x.CanEdit, locks);
+        }));
     }
 
     [HttpPost("reports")]
@@ -138,6 +153,167 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         return Created($"/api/setup/reports/{report.Id}", new { report.Id });
     }
 
+    [HttpPut("reports/{reportId:guid}/configuration")]
+    public async Task<IActionResult> UpdateReportConfiguration(Guid reportId, UpdateReportConfigurationRequest request, CancellationToken ct)
+    {
+        var report = await db.ReportDefinitions.Include(x => x.SubmissionDepartments)
+            .FirstOrDefaultAsync(x => x.Id == reportId && x.IsActive, ct);
+        if (report is null) return NotFound();
+        await access.RequireAsync("reports.manage", report.OwnerDivisionId, reportId, ct);
+        if (request.OwnerDivisionId != report.OwnerDivisionId && request.OwnerDivisionId != Guid.Empty)
+            await access.RequireAsync("reports.manage", request.OwnerDivisionId, reportId, ct);
+
+        if (request.RowVersion != Convert.ToBase64String(report.RowVersion))
+            throw new TrackingConflictException("This report changed since you opened it. Reopen Edit report and try again.");
+
+        var version = await db.DefinitionVersions.Where(x => x.ReportDefinitionId == reportId)
+            .OrderByDescending(x => x.VersionNumber).FirstOrDefaultAsync(ct);
+        if (version is null) throw new TrackingConflictException("This report has no definition version to update.");
+        var schedule = await db.ScheduleRules.Where(x => x.DefinitionVersionId == version.Id)
+            .OrderByDescending(x => x.CreatedAtUtc).FirstOrDefaultAsync(ct);
+        var errors = new Dictionary<string, string[]>();
+        var name = request.Name?.Trim() ?? report.Name;
+        var reportTypeId = request.ReportTypeId ?? report.ReportTypeId;
+        var dueTime = request.DueTime ?? version.DueTime;
+        var previousReportOffset = schedule?.OffsetDays ?? 0;
+        var reportOffset = request.ReportDeadlineOffsetDays ?? previousReportOffset;
+        var componentLead = request.ComponentDeadlineOffsetDays ?? version.ComponentDeadlineOffsetDays;
+        var instruction = request.InstructionReference is null ? report.InstructionReference : TrimOptional(request.InstructionReference);
+        var description = request.Description is null ? report.Description : TrimOptional(request.Description);
+
+        if (request.Code is not null && request.Code != report.Code)
+            errors["code"] = ["Report code cannot be changed after creation."];
+        if (request.Name is not null && name.Length is 0 or > 150)
+            errors["name"] = ["Enter a report name of at most 150 characters."];
+        if (reportTypeId is not (1 or 2))
+            errors["reportTypeId"] = ["Choose a valid report type."];
+        if (reportOffset is < 0 or > 365)
+            errors["reportDeadlineOffsetDays"] = ["Report deadline days must be between 0 and 365 calendar days after period end."];
+        if (componentLead is < 0 or > 365)
+            errors["componentDeadlineOffsetDays"] = ["Deadline lead days must be between 0 and 365 days."];
+        if (request.InstructionReference?.Length > 250) errors["instructionReference"] = ["Use at most 250 characters."];
+        if (request.Description?.Length > 1000) errors["description"] = ["Use at most 1,000 characters."];
+
+        var previousDepartmentIds = report.SubmissionDepartments.Select(x => x.DepartmentId).Order().ToArray();
+        var destinationSupplied = request.SubmissionRecipientId.HasValue || request.SubmissionDepartmentIds is not null;
+        var destinationChanged = destinationSupplied &&
+            (request.SubmissionRecipientId != report.SubmissionRecipientId ||
+                !previousDepartmentIds.SequenceEqual((request.SubmissionDepartmentIds ?? []).Order()));
+        SubmissionRecipient? recipient = null;
+        if (destinationChanged)
+        {
+            try
+            {
+                recipient = await ValidateDestination(request.SubmissionRecipientId ?? Guid.Empty, request.SubmissionDepartmentIds, ct);
+            }
+            catch (TrackingValidationException exception)
+            {
+                errors["submissionDepartmentIds"] = [exception.Message];
+            }
+        }
+        var validFrequency = Enum.TryParse<Frequency>(request.Frequency, out var frequency) &&
+            Enum.GetName(frequency) == request.Frequency;
+        if (!validFrequency)
+            errors["frequency"] = ["Choose a valid reporting frequency."];
+        else if (frequency != version.Frequency && await db.ReportCycles.AnyAsync(x => x.ReportDefinitionId == reportId, ct))
+            errors["frequency"] = ["Frequency is locked because at least one reporting cycle exists."];
+
+        async Task CheckDivision(string field, string label, Guid? current, Guid? proposed, string type, string responsibility)
+        {
+            if (current == proposed) return;
+            if (current is Guid currentId && await HasDivisionResponsibility(reportId, currentId, type, ct))
+                errors[field] = [$"{label} is locked because {responsibility} is assigned in the current division."];
+            else if (!proposed.HasValue || proposed == Guid.Empty || !await db.Divisions.AnyAsync(x => x.Id == proposed && x.IsActive, ct))
+                errors[field] = [$"Choose an active {label.ToLowerInvariant()}."];
+            else if (await HasDivisionResponsibility(reportId, proposed.Value, type, ct))
+                errors[field] = [$"{label} cannot change because the proposed division already has a {responsibility} responsibility assigned."];
+        }
+
+        await CheckDivision("ownerDivisionId", "Coordinating Division", report.OwnerDivisionId, request.OwnerDivisionId,
+            ReportResponsibilityAssignmentsController.ControllerResponsibility, "Report Controller");
+        await CheckDivision("receivingDivisionId", "Receiving Division", report.ReceivingDivisionId, request.ReceivingDivisionId,
+            TrackingAccess.ComponentReceiverResponsibility, "Report Receiver");
+        await CheckDivision("submittingDivisionId", "Final Submitting Division", report.SubmittingDivisionId, request.SubmittingDivisionId,
+            MainSenderResponsibility, "Final Submission");
+        if (errors.Count > 0) return BadRequest(new ValidationProblemDetails(errors) { Status = StatusCodes.Status400BadRequest });
+
+        var previous = new { report.Code, report.Name, report.ReportTypeId, version.Frequency, report.OwnerDivisionId,
+            report.ReceivingDivisionId, report.SubmittingDivisionId, version.DueTime, ReportDeadlineOffsetDays = previousReportOffset,
+            version.ComponentDeadlineOffsetDays, report.SubmissionRecipientId, SubmissionDepartmentIds = previousDepartmentIds,
+            report.InstructionReference, report.Description };
+        var current = new { report.Code, Name = name, ReportTypeId = reportTypeId, Frequency = frequency, request.OwnerDivisionId,
+            request.ReceivingDivisionId, request.SubmittingDivisionId, DueTime = dueTime, ReportDeadlineOffsetDays = reportOffset,
+            ComponentDeadlineOffsetDays = componentLead, SubmissionRecipientId = recipient?.Id ?? report.SubmissionRecipientId,
+            SubmissionDepartmentIds = destinationChanged ? request.SubmissionDepartmentIds!.Order().ToArray() : previousDepartmentIds,
+            InstructionReference = instruction, Description = description };
+        if (previous.Equals(current))
+            return NoContent();
+
+        var receiverChanged = request.ReceivingDivisionId != report.ReceivingDivisionId;
+        if (receiverChanged || componentLead != version.ComponentDeadlineOffsetDays)
+        {
+            var components = await db.ComponentDefinitions.Where(x => x.DefinitionVersionId == version.Id).ToListAsync(ct);
+            foreach (var component in components)
+            {
+                if (receiverChanged) component.ReceivingDivisionId = request.ReceivingDivisionId!.Value;
+                // Existing components with the old default follow the new default. Preserve legacy custom offsets.
+                if (componentLead != version.ComponentDeadlineOffsetDays &&
+                    UsesStoredComponentDefault(component.DeadlineRuleJson, version.ComponentDeadlineOffsetDays))
+                    component.DeadlineRuleJson = JsonSerializer.Serialize(new { offsetDays = componentLead });
+            }
+        }
+        if (reportOffset != previousReportOffset)
+        {
+            if (schedule is null)
+            {
+                schedule = new ScheduleRule { DefinitionVersionId = version.Id, PeriodConvention = "PeriodEndPlusCalendarDays" };
+                db.ScheduleRules.Add(schedule);
+            }
+            schedule.PeriodConvention = "PeriodEndPlusCalendarDays";
+            schedule.OffsetDays = reportOffset;
+            schedule.FixedDay = null;
+            schedule.UsesBusinessDays = false;
+            schedule.HolidayAdjustmentAuthorized = false;
+        }
+        if (recipient is not null) ApplyDestination(report, recipient, request.SubmissionDepartmentIds!);
+        version.Frequency = frequency;
+        version.DueTime = dueTime;
+        version.ComponentDeadlineOffsetDays = componentLead;
+        report.Name = name;
+        report.ReportTypeId = reportTypeId;
+        report.Description = description;
+        report.InstructionReference = instruction;
+        report.OwnerDivisionId = request.OwnerDivisionId;
+        report.ReceivingDivisionId = request.ReceivingDivisionId;
+        report.SubmittingDivisionId = request.SubmittingDivisionId;
+        report.UpdatedAtUtc = DateTime.UtcNow;
+        Audit(nameof(ReportDefinition), reportId, "ReportConfigurationChanged", new { Previous = previous, Current = current });
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    private static string? TrimOptional(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static bool UsesStoredComponentDefault(string? deadlineRuleJson, int oldDefault)
+    {
+        if (string.IsNullOrWhiteSpace(deadlineRuleJson)) return false;
+        using var rule = JsonDocument.Parse(deadlineRuleJson);
+        return rule.RootElement.ValueKind == JsonValueKind.Object &&
+            rule.RootElement.TryGetProperty("offsetDays", out var offset) &&
+            offset.ValueKind == JsonValueKind.Number && offset.TryGetInt32(out var days) && days == oldDefault;
+    }
+
+    private IQueryable<ResponsibilityAssignment> CurrentResponsibilities()
+    {
+        var now = DateTime.UtcNow;
+        return db.ResponsibilityAssignments.Where(x => x.EffectiveFromUtc <= now &&
+            (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc > now));
+    }
+
+    private Task<bool> HasDivisionResponsibility(Guid reportId, Guid divisionId, string type, CancellationToken ct) =>
+        CurrentResponsibilities().AnyAsync(x => x.ReportDefinitionId == reportId && x.DivisionId == divisionId &&
+            x.ResponsibilityType == type, ct);
+
     [HttpPut("reports/{reportId:guid}/submission-destination")]
     public async Task<IActionResult> SetSubmissionDestination(Guid reportId, SetSubmissionDestinationRequest request, CancellationToken ct)
     {
@@ -148,18 +324,25 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         var recipient = await ValidateDestination(request.SubmissionRecipientId, request.SubmissionDepartmentIds, ct);
         var previousRecipientId = report.SubmissionRecipientId;
         var previousDepartmentIds = report.SubmissionDepartments.Select(x => x.DepartmentId).ToArray();
-        report.SubmissionRecipientId = recipient.Id;
-        report.BbRecipient = recipient.Name;
-        var selected = request.SubmissionDepartmentIds.ToHashSet();
-        db.ReportSubmissionDepartments.RemoveRange(report.SubmissionDepartments.Where(x => !selected.Contains(x.DepartmentId)).ToArray());
-        foreach (var departmentId in selected.Except(previousDepartmentIds))
-            report.SubmissionDepartments.Add(new ReportSubmissionDepartment { ReportDefinitionId = report.Id, DepartmentId = departmentId });
+        ApplyDestination(report, recipient, request.SubmissionDepartmentIds);
+        report.UpdatedAtUtc = DateTime.UtcNow;
         Audit(nameof(ReportDefinition), report.Id, "SubmissionDestinationChanged", new
         {
             previousRecipientId, previousDepartmentIds, report.SubmissionRecipientId, request.SubmissionDepartmentIds
         });
         await db.SaveChangesAsync(ct);
         return NoContent();
+    }
+
+    private void ApplyDestination(ReportDefinition report, SubmissionRecipient recipient, IReadOnlyList<Guid> departmentIds)
+    {
+        report.SubmissionRecipientId = recipient.Id;
+        report.BbRecipient = recipient.Name;
+        var selected = departmentIds.ToHashSet();
+        var existing = report.SubmissionDepartments.Select(x => x.DepartmentId).ToHashSet();
+        db.ReportSubmissionDepartments.RemoveRange(report.SubmissionDepartments.Where(x => !selected.Contains(x.DepartmentId)).ToArray());
+        foreach (var departmentId in selected.Except(existing))
+            report.SubmissionDepartments.Add(new ReportSubmissionDepartment { ReportDefinitionId = report.Id, DepartmentId = departmentId });
     }
 
     private async Task<SubmissionRecipient> ValidateDestination(Guid recipientId, IReadOnlyList<Guid>? departmentIds, CancellationToken ct)
@@ -182,12 +365,19 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         if (request.CoordinatingDivisionId != report.OwnerDivisionId)
             await access.RequireAsync(AccessPermissions.Responsibilities, request.CoordinatingDivisionId, reportId, ct);
         await ValidateResponsibilities(request, ct);
+        if (request.CoordinatingDivisionId != report.OwnerDivisionId && await HasDivisionResponsibility(reportId,
+            request.CoordinatingDivisionId, ReportResponsibilityAssignmentsController.ControllerResponsibility, ct))
+            throw new TrackingValidationException("Coordinating Division cannot change because the proposed division already has a Report Controller responsibility assigned.");
+        if (request.SubmittingDivisionId != report.SubmittingDivisionId &&
+            await HasDivisionResponsibility(reportId, request.SubmittingDivisionId, MainSenderResponsibility, ct))
+            throw new TrackingValidationException("Final Submitting Division cannot change because the proposed division already has a Final Submission responsibility assigned.");
         var now = DateTime.UtcNow;
         var assignments = await db.ResponsibilityAssignments.Where(x => x.ReportDefinitionId == reportId && x.ResponsibilityType == "MainSender" &&
             (!x.EffectiveToUtc.HasValue || x.EffectiveToUtc > now)).ToListAsync(ct);
         foreach (var assignment in assignments) assignment.EffectiveToUtc = now;
         var previousCoordinating = report.OwnerDivisionId; var previousSubmitting = report.SubmittingDivisionId;
         report.OwnerDivisionId = request.CoordinatingDivisionId; report.SubmittingDivisionId = request.SubmittingDivisionId;
+        report.UpdatedAtUtc = now;
         db.ResponsibilityAssignments.Add(new ResponsibilityAssignment { ReportDefinitionId = reportId, DivisionId = request.SubmittingDivisionId,
             PrimaryAssigneeId = request.PrimarySubmittingAssigneeId, AlternateAssigneeId = request.AlternateSubmittingAssigneeId,
             ResponsibilityType = "MainSender", EffectiveFromUtc = now });
@@ -305,6 +495,7 @@ public sealed class SetupController(ReportTrackerDbContext db, TrackingAccess ac
         }
         var main = obligations.Single(x => x.Type == ObligationType.External);
         foreach (var component in obligations.Where(x => x.Type == ObligationType.Internal)) component.ParentObligationId = main.Id;
+        report.UpdatedAtUtc = DateTime.UtcNow;
         db.ReportCycles.Add(cycle);
         Audit(nameof(ReportCycle), cycle.Id, "CycleCreated", new { reportId, cycle.PeriodKey, ObligationCount = cycle.Obligations.Count });
         try

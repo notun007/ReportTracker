@@ -58,12 +58,7 @@ public sealed class ReportResponsibilityAssignmentsController(ReportTrackerDbCon
         await ValidatePair("Report Controller", report.OwnerDivisionId, request.Controller, ct);
         await ValidatePair("Report Receiver", report.ReceivingDivisionId, request.Receiver, ct);
         await ValidatePair("Final Submission", report.SubmittingDivisionId, request.FinalSubmission, ct);
-        byte[] version;
-        try { version = Convert.FromBase64String(request.RowVersion ?? ""); }
-        catch (FormatException) { throw new TrackingValidationException("Reload responsibilities and try again."); }
-        if (version.Length != 8) throw new TrackingValidationException("Reload responsibilities and try again.");
-        if (!version.SequenceEqual(report.RowVersion))
-            throw new TrackingConflictException("This report changed since you loaded it. Reload responsibilities and try again.");
+        MarkAssignmentChange(report, request.RowVersion);
         var now = DateTime.UtcNow;
         var current = await Current(reportId, now).ToListAsync(ct);
         var receiverCount = current.Where(x => x.ResponsibilityType == TrackingAccess.ComponentReceiverResponsibility && x.DivisionId == report.ReceivingDivisionId)
@@ -77,7 +72,6 @@ public sealed class ReportResponsibilityAssignmentsController(ReportTrackerDbCon
         Add(ControllerResponsibility, report.OwnerDivisionId, request.Controller);
         Add(TrackingAccess.ComponentReceiverResponsibility, report.ReceivingDivisionId!.Value, request.Receiver);
         Add(FinalSubmissionResponsibility, report.SubmittingDivisionId!.Value, request.FinalSubmission);
-        db.Entry(report).Property(x => x.RowVersion).OriginalValue = version;
         report.UpdatedAtUtc = now;
         db.AuditEvents.Add(new AuditEvent
         {
@@ -97,6 +91,59 @@ public sealed class ReportResponsibilityAssignmentsController(ReportTrackerDbCon
             ReportDefinitionId = reportId, DivisionId = division, ResponsibilityType = type,
             PrimaryAssigneeId = pair.PrimaryAssigneeId, AlternateAssigneeId = pair.AlternateAssigneeId, EffectiveFromUtc = now
         });
+    }
+
+    [HttpDelete("{role}")]
+    public async Task<IActionResult> Unassign(Guid reportId, string role,
+        [FromBody] UnassignReportResponsibilityRequest request, CancellationToken ct)
+    {
+        var report = await db.ReportDefinitions.FirstOrDefaultAsync(x => x.Id == reportId && x.IsActive, ct);
+        if (report is null) return NotFound();
+        await access.RequireAsync(AccessPermissions.Responsibilities, report.OwnerDivisionId, reportId, ct);
+        var (type, divisionId) = role switch
+        {
+            "controller" => (ControllerResponsibility, (Guid?)report.OwnerDivisionId),
+            "receiver" => (TrackingAccess.ComponentReceiverResponsibility, report.ReceivingDivisionId),
+            "finalSubmission" => (FinalSubmissionResponsibility, report.SubmittingDivisionId),
+            _ => throw new TrackingValidationException("Choose a valid report responsibility.")
+        };
+        MarkAssignmentChange(report, request.RowVersion);
+        if (!divisionId.HasValue) return NoContent();
+
+        var now = DateTime.UtcNow;
+        var assignments = await Current(reportId, now).Where(x => x.ResponsibilityType == type && x.DivisionId == divisionId)
+            .ToListAsync(ct);
+        if (assignments.Count == 0) return NoContent();
+        if (type == TrackingAccess.ComponentReceiverResponsibility &&
+            assignments.SelectMany(x => new Guid?[] { x.PrimaryAssigneeId, x.AlternateAssigneeId })
+                .Where(x => x.HasValue).Distinct().Count() > 2)
+            throw new TrackingConflictException("This report has more than two receiving officers. Use the Receiving officers list to manage that team.");
+
+        db.ResponsibilityAssignments.RemoveRange(assignments);
+        report.UpdatedAtUtc = now;
+        db.AuditEvents.Add(new AuditEvent
+        {
+            EntityType = nameof(ReportDefinition), EntityId = reportId, ActorUserId = access.UserId, Action = "ReportResponsibilityUnassigned",
+            DataJson = JsonSerializer.Serialize(new
+            {
+                ResponsibilityType = type,
+                DivisionId = divisionId,
+                Removed = assignments.Select(x => new { x.Id, x.PrimaryAssigneeId, x.AlternateAssigneeId, x.EffectiveFromUtc })
+            })
+        });
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    private void MarkAssignmentChange(ReportDefinition report, string? rowVersion)
+    {
+        byte[] version;
+        try { version = Convert.FromBase64String(rowVersion ?? ""); }
+        catch (FormatException) { throw new TrackingValidationException("Reload responsibilities and try again."); }
+        if (version.Length != 8) throw new TrackingValidationException("Reload responsibilities and try again.");
+        if (!version.SequenceEqual(report.RowVersion))
+            throw new TrackingConflictException("This report changed since you loaded it. Reload responsibilities and try again.");
+        db.Entry(report).Property(x => x.RowVersion).OriginalValue = version;
     }
 
     private IQueryable<ResponsibilityAssignment> Current(Guid reportId, DateTime now) => db.ResponsibilityAssignments.Where(x =>
